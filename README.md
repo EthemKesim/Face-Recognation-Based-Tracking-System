@@ -2,7 +2,7 @@
 
 This project is a real-time face recognition system developed using Python. It utilizes computer vision techniques to detect and recognize faces through a webcam, store facial data in a database, and log detection events.
 
----
+
 
 ## Features
 
@@ -15,7 +15,7 @@ This project is a real-time face recognition system developed using Python. It u
 - Logging system for recognized individuals  
 - Performance optimizations for smoother processing  
 
----
+
 
 ## Technologies Used
 
@@ -26,7 +26,7 @@ This project is a real-time face recognition system developed using Python. It u
 - SQLite  
 - NumPy  
 
----
+
 
 ## Installation
 
@@ -44,7 +44,7 @@ pip install dlib-bin
 pip install face-recognation --no-deps
 ```
 
----
+
 
 ## Setup
 
@@ -56,7 +56,7 @@ python setup_database.py
 
 This will create the required SQLite database file (`face_records.db`).
 
----
+
 
 ## Usage
 
@@ -71,7 +71,7 @@ Controls:
 * Press `s` to save a new face
 * Press `q` to quit
 
----
+
 
 ### Register a new face manually
 
@@ -84,7 +84,7 @@ Controls:
 * Press `s` to capture and save
 * Press `q` to quit
 
----
+
 
 ### Test camera and face detection
 
@@ -94,7 +94,7 @@ python camera_test.py
 
 This module allows testing of face detection without storing any data.
 
----
+
 
 ### Delete registered users
 
@@ -104,7 +104,7 @@ python delete_record.py
 
 Displays all registered users and allows deletion by ID.
 
----
+
 
 ## Project Structure
 
@@ -118,7 +118,7 @@ Displays all registered users and allows deletion by ID.
 ├── access_logs.txt
 ```
 
----
+
 
 ## System Overview
 
@@ -130,7 +130,7 @@ Displays all registered users and allows deletion by ID.
 * If no match is found, the face is labeled as unknown and can be registered
 * Recognized faces are logged with timestamps
 
----
+
 
 ## Logging
 
@@ -143,7 +143,7 @@ Detected individuals are recorded in the `access_logs.txt` file along with times
 * Processing every third frame instead of every frame
 * Reduced camera resolution for improved FPS
 
----
+
 
 ## Notes
 
@@ -152,7 +152,7 @@ Detected individuals are recorded in the `access_logs.txt` file along with times
 * Duplicate entries are restricted by encoding comparison
 * Recognition tolerance can be adjusted in the code
 
----
+
 
 ## Future Improvements
 
