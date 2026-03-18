@@ -6,6 +6,9 @@ import json
 import random
 from datetime import datetime, time
 
+# -------------------------------
+# LOAD FACES
+# -------------------------------
 def load_registered_faces():
     conn = sqlite3.connect('face_records.db')
     cursor = conn.cursor()
@@ -23,62 +26,54 @@ def load_registered_faces():
     return known_encodings, known_names
 
 
+# -------------------------------
+# TIME RULES
+# -------------------------------
 def get_status_by_time(event_type, current_dt):
     current_t = current_dt.time()
 
-    # Time rules
     morning_warning = time(9, 15)
     morning_violation = time(9, 30)
 
     lunch_start = time(12, 0)
     lunch_end = time(13, 15)
 
-    afternoon_warning = time(13, 15)
-    afternoon_violation = time(13, 30)
+    afternoon_warning = time(13, 30)
+    afternoon_violation = time(13, 45)
 
     overtime_time = time(18, 0)
 
-    # -------------------------------
-    # LUNCH BREAK (NO PENALTY)
-    # -------------------------------
     if lunch_start <= current_t <= lunch_end:
-        return f"{event_type} (Lunch Break - No Warning)"
+        return f"{event_type} (Lunch Break)"
 
-    # -------------------------------
-    # CHECK-IN LOGIC
-    # -------------------------------
     if event_type == "CHECK-IN":
-
-        # MORNING RULES
         if current_t < lunch_start:
             if current_t > morning_violation:
-                return "VIOLATION: Late Entry (Morning)"
+                return "VIOLATION: Late (Morning)"
             elif current_t > morning_warning:
                 return "WARNING: Late (Morning)"
             else:
                 return "CHECK-IN"
-
-        # AFTERNOON (POST-LUNCH) RULES
         else:
             if current_t > afternoon_violation:
-                return "VIOLATION: Late Entry (Afternoon)"
+                return "VIOLATION: Late (Afternoon)"
             elif current_t > afternoon_warning:
                 return "WARNING: Late (Afternoon)"
             else:
                 return "CHECK-IN"
 
-    # -------------------------------
-    # CHECK-OUT LOGIC
-    # -------------------------------
     elif event_type == "CHECK-OUT":
         if current_t > overtime_time:
-            return "OVERTIME"
+            return "CHECK-OUT (After 18:00)"
         else:
             return "CHECK-OUT"
 
     return event_type
 
 
+# -------------------------------
+# LOG
+# -------------------------------
 def log_event(name, status):
     timestamp = datetime.now().strftime('%d/%m/%Y %H:%M:%S')
 
@@ -88,40 +83,43 @@ def log_event(name, status):
     print(f"📝 {name} -> {status}")
 
 
+# -------------------------------
+# SAVE FACE
+# -------------------------------
 def save_new_face(face_encoding, known_encodings, known_names):
     if known_encodings:
         matches = face_recognition.compare_faces(known_encodings, face_encoding, tolerance=0.5)
         if True in matches:
             match_index = matches.index(True)
-            print(f"⚠️ Already registered as '{known_names[match_index]}'")
+            print(f"⚠️ Already registered as {known_names[match_index]}")
             return None
 
     name = input("Enter name: ").strip()
     if not name:
-        print("⚠️ Name cannot be empty")
         return None
 
     conn = sqlite3.connect('face_records.db')
     cursor = conn.cursor()
 
     encoding_json = json.dumps(face_encoding.tolist())
-    cursor.execute(
-        "INSERT INTO users (name, face_vector) VALUES (?, ?)",
-        (name, encoding_json)
-    )
+    cursor.execute("INSERT INTO users (name, face_vector) VALUES (?, ?)", (name, encoding_json))
 
     conn.commit()
     conn.close()
 
-    print(f"✅ {name} added successfully")
+    print(f"✅ {name} added")
     return name
 
 
+# -------------------------------
+# INIT
+# -------------------------------
 known_encodings, known_names = load_registered_faces()
 
 color_dictionary = {}
 last_seen = {}
 user_status = {}
+user_entry_time = {}  # 🔥 giriş saatleri
 
 def get_color(name):
     if name == "Unknown":
@@ -136,17 +134,21 @@ def get_color(name):
     return color_dictionary[name]
 
 
+# -------------------------------
+# CAMERA
+# -------------------------------
 video_capture = cv2.VideoCapture(0)
-video_capture.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
-video_capture.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
 
 face_locations = []
 face_encodings = []
 face_names = []
 frame_counter = 0
 
-print("System Active | 's' = save | 'q' = quit")
+print("System Active | s=save | q=quit")
 
+# -------------------------------
+# MAIN LOOP
+# -------------------------------
 while True:
     ret, frame = video_capture.read()
     if not ret:
@@ -167,31 +169,52 @@ while True:
 
             if known_encodings:
                 matches = face_recognition.compare_faces(known_encodings, face_encoding, tolerance=0.55)
-                face_distances = face_recognition.face_distance(known_encodings, face_encoding)
+                distances = face_recognition.face_distance(known_encodings, face_encoding)
 
-                if len(face_distances) > 0:
-                    best_match_index = np.argmin(face_distances)
-                    if matches[best_match_index]:
-                        name = known_names[best_match_index]
+                if len(distances) > 0:
+                    best_match = np.argmin(distances)
+                    if matches[best_match]:
+                        name = known_names[best_match]
 
             face_names.append(name)
 
             if name != "Unknown":
-                if name not in last_seen or (current_time - last_seen[name]).total_seconds() > 10:
+                if name not in last_seen or (current_time - last_seen[name]).total_seconds() > 180:
 
+                    # CHECK-IN
                     if name not in user_status or user_status[name] == "OUT":
                         event_type = "CHECK-IN"
                         user_status[name] = "IN"
+                        user_entry_time[name] = current_time
+
+                        status = get_status_by_time(event_type, current_time)
+                        log_event(name, status)
+
+                    # CHECK-OUT
                     else:
                         event_type = "CHECK-OUT"
                         user_status[name] = "OUT"
 
-                    final_status = get_status_by_time(event_type, current_time)
-                    log_event(name, final_status)
+                        # çalışma süresi hesapla
+                        if name in user_entry_time:
+                            work_duration = current_time - user_entry_time[name]
+                            hours = work_duration.total_seconds() / 3600
+
+                            if hours > 9:
+                                overtime = hours - 9
+                                status = f"OVERTIME: {overtime:.2f} hours"
+                            else:
+                                status = get_status_by_time(event_type, current_time)
+                        else:
+                            status = get_status_by_time(event_type, current_time)
+
+                        log_event(name, status)
+
                     last_seen[name] = current_time
 
     frame_counter += 1
 
+    # DRAW
     for (top, right, bottom, left), name in zip(face_locations, face_names):
         top *= 4
         right *= 4
@@ -206,7 +229,7 @@ while True:
         cv2.putText(frame, name, (left + 5, bottom - 10),
                     cv2.FONT_HERSHEY_DUPLEX, 0.7, (255, 255, 255), 1)
 
-    cv2.imshow('Face Recognition System', frame)
+    cv2.imshow("Face Recognition System", frame)
 
     key = cv2.waitKey(1) & 0xFF
 
