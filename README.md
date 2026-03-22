@@ -161,5 +161,3 @@ Detected individuals are recorded in the `access_logs.txt` file along with times
 * Cloud-based database integration
 * Attendance tracking features
 
-
-sa
