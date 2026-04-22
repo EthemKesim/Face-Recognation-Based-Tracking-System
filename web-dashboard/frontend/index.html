@@ -1,0 +1,239 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Attendance Admin Dashboard</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&family=Plus+Jakarta+Sans:wght@500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <div class="shell">
+    <aside class="sidebar">
+      <div class="brand">
+        <p class="brand-eyebrow">Local Admin Panel</p>
+        <h1>Face Attendance</h1>
+        <p class="brand-copy">Read-only dashboard powered by your existing Python recognition system.</p>
+      </div>
+
+      <nav class="nav">
+        <button class="nav-link active" data-view="dashboard"><span class="nav-icon">D</span><span>Dashboard</span></button>
+        <button class="nav-link" data-view="attendance"><span class="nav-icon">A</span><span>Attendance Records</span></button>
+        <button class="nav-link" data-view="employees"><span class="nav-icon">E</span><span>Registered Employees</span></button>
+        <button class="nav-link" data-view="logs"><span class="nav-icon">L</span><span>Activity Logs</span></button>
+        <button class="nav-link" data-view="rules"><span class="nav-icon">R</span><span>Status Rules</span></button>
+      </nav>
+
+      <div class="sidebar-footer">
+        <p class="muted-label">Mode</p>
+        <p class="sidebar-value">Admin Only</p>
+        <p class="muted-label">Refresh</p>
+        <p class="sidebar-value">Every 5 seconds</p>
+      </div>
+    </aside>
+
+    <main class="content">
+      <header class="topbar">
+        <div class="topbar-copy">
+          <p class="eyebrow">Monitoring</p>
+          <h2 id="page-title">Dashboard</h2>
+          <p class="topbar-subtitle">Professional read-only operations view for your live face recognition attendance data.</p>
+        </div>
+        <div class="topbar-actions">
+          <div class="status-pill">
+            <div class="live-dot"></div>
+            <span>Live sync</span>
+          </div>
+          <div class="topbar-meta">
+            <span id="last-refresh">Waiting for data</span>
+          </div>
+        </div>
+      </header>
+
+      <section class="view active" data-view-panel="dashboard">
+        <div class="summary-grid" id="summary-cards"></div>
+
+        <div class="two-column">
+          <section class="panel">
+            <div class="panel-header">
+              <div>
+                <p class="eyebrow">Live Local Monitoring</p>
+                <h3>Recognition Status</h3>
+              </div>
+            </div>
+            <div id="latest-detection" class="live-card"></div>
+          </section>
+
+          <section class="panel">
+            <div class="panel-header">
+              <div>
+                <p class="eyebrow">Recent Detections</p>
+                <h3>Latest Real Events</h3>
+              </div>
+            </div>
+            <div id="recent-detections" class="stack-list"></div>
+          </section>
+        </div>
+
+        <section class="panel">
+          <div class="panel-header">
+            <div>
+              <p class="eyebrow">Today</p>
+              <h3>Attendance Snapshot</h3>
+            </div>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>ID</th>
+                  <th>Employee Name</th>
+                  <th>Date</th>
+                  <th>Entry Time</th>
+                  <th>Exit Time</th>
+                  <th>Current Status</th>
+                  <th>Event Type</th>
+                  <th>Notes</th>
+                </tr>
+              </thead>
+              <tbody id="today-attendance-body"></tbody>
+            </table>
+          </div>
+        </section>
+      </section>
+
+      <section class="view" data-view-panel="attendance">
+        <section class="panel">
+          <div class="panel-header form-header">
+            <div>
+              <p class="eyebrow">Filters</p>
+              <h3>Attendance Records</h3>
+            </div>
+            <form id="attendance-filters" class="filter-row">
+              <input type="search" name="search" placeholder="Search employee name">
+              <input type="date" name="date">
+              <select name="status">
+                <option value="">All statuses</option>
+                <option value="Still Inside">Still Inside</option>
+                <option value="Checked Out">Checked Out</option>
+                <option value="late">Late</option>
+                <option value="Lunch Break">Lunch Break</option>
+                <option value="Overtime">Overtime</option>
+              </select>
+              <button type="submit">Apply</button>
+            </form>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>ID</th>
+                  <th>Employee Name</th>
+                  <th>Date</th>
+                  <th>Entry Time</th>
+                  <th>Exit Time</th>
+                  <th>Current Status</th>
+                  <th>Event Type</th>
+                  <th>Notes</th>
+                </tr>
+              </thead>
+              <tbody id="attendance-body"></tbody>
+            </table>
+          </div>
+        </section>
+      </section>
+
+      <section class="view" data-view-panel="employees">
+        <section class="panel">
+          <div class="panel-header form-header">
+            <div>
+              <p class="eyebrow">Directory</p>
+              <h3>Registered Employees</h3>
+            </div>
+            <form id="employee-filters" class="filter-row">
+              <input type="search" name="search" placeholder="Search employee name">
+              <select name="status">
+                <option value="">Any current status</option>
+                <option value="Still Inside">Still Inside</option>
+                <option value="Absent">Absent / No activity today</option>
+                <option value="Checked Out">Checked Out</option>
+                <option value="Lunch Break">Lunch Break</option>
+              </select>
+              <button type="submit">Apply</button>
+            </form>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>ID</th>
+                  <th>Name</th>
+                  <th>Face Registered</th>
+                  <th>Last Seen</th>
+                  <th>Current Status</th>
+                  <th>Details</th>
+                </tr>
+              </thead>
+              <tbody id="employees-body"></tbody>
+            </table>
+          </div>
+        </section>
+      </section>
+
+      <section class="view" data-view-panel="logs">
+        <section class="panel">
+          <div class="panel-header form-header">
+            <div>
+              <p class="eyebrow">Audit Trail</p>
+              <h3>Activity Logs</h3>
+            </div>
+            <form id="log-filters" class="filter-row">
+              <input type="search" name="search" placeholder="Search employee name">
+              <input type="date" name="date">
+              <select name="status">
+                <option value="">All event types</option>
+                <option value="CHECK-IN">CHECK-IN</option>
+                <option value="CHECK-OUT">CHECK-OUT</option>
+                <option value="late">Late</option>
+                <option value="Lunch Break">Lunch Break</option>
+                <option value="OVERTIME">Overtime</option>
+              </select>
+              <button type="submit">Apply</button>
+            </form>
+          </div>
+          <div id="log-list" class="log-list timeline"></div>
+        </section>
+      </section>
+
+      <section class="view" data-view-panel="rules">
+        <section class="panel">
+          <div class="panel-header">
+            <div>
+              <p class="eyebrow">Mirrored From Python</p>
+              <h3>Status Rules Reference</h3>
+            </div>
+          </div>
+          <div id="rules-panel" class="rules-grid"></div>
+        </section>
+      </section>
+    </main>
+  </div>
+
+  <dialog id="employee-modal" class="modal">
+    <div class="modal-card">
+      <div class="modal-header">
+        <div>
+          <p class="eyebrow">Employee Details</p>
+          <h3 id="modal-title">Employee</h3>
+        </div>
+        <button id="modal-close" class="icon-button" aria-label="Close">&times;</button>
+      </div>
+      <div id="modal-content" class="modal-content"></div>
+    </div>
+  </dialog>
+
+  <script src="/app.js"></script>
+</body>
+</html>

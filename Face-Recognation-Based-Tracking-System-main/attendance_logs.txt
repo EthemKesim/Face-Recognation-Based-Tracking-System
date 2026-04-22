@@ -1,0 +1,4 @@
+18/03/2026 15:26:50 - Ozan - CHECK-IN
+18/03/2026 15:27:01 - Ozan - CHECK-OUT
+21/04/2026 20:22:27 - Ozan - VIOLATION: Late (Afternoon)
+21/04/2026 20:22:54 - Ethem - VIOLATION: Late (Afternoon)
