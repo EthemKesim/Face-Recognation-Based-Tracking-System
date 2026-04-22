@@ -1,13 +1,11 @@
 import cv2
 import face_recognition
-import sqlite3
-import numpy as np
 import json
 
+from database_utils import init_db, insert_user
+
 def register_new_face():
-    # Connect to the database
-    conn = sqlite3.connect('face_records.db')
-    cursor = conn.cursor()
+    init_db()
 
     video_capture = cv2.VideoCapture(0)
     print("Camera started. Press 's' to capture and save, 'q' to quit.")
@@ -35,9 +33,8 @@ def register_new_face():
                 name = input("Enter the name for this person: ")
                 # Take the first face found
                 encoding_json = json.dumps(face_encodings[0].tolist())
-                
-                cursor.execute("INSERT INTO users (name, face_vector) VALUES (?, ?)", (name, encoding_json))
-                conn.commit()
+
+                insert_user(name, encoding_json)
                 print(f"Success! {name} has been registered.")
             else:
                 print("No face detected! Please try again.")
@@ -47,7 +44,6 @@ def register_new_face():
 
     video_capture.release()
     cv2.destroyAllWindows()
-    conn.close()
 
 if __name__ == "__main__":
     register_new_face()

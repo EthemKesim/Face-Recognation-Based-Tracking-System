@@ -1,29 +1,10 @@
 import cv2
 import face_recognition
-import sqlite3
-import numpy as np
 import json
 import random
 from datetime import datetime, time
 
-# -------------------------------
-# LOAD FACES
-# -------------------------------
-def load_registered_faces():
-    conn = sqlite3.connect('face_records.db')
-    cursor = conn.cursor()
-    cursor.execute("SELECT name, face_vector FROM users")
-    rows = cursor.fetchall()
-
-    known_encodings = []
-    known_names = []
-
-    for row in rows:
-        known_names.append(row[0])
-        known_encodings.append(np.array(json.loads(row[1])))
-
-    conn.close()
-    return known_encodings, known_names
+from database_utils import init_db, insert_user, load_registered_faces, log_attendance_event
 
 
 # -------------------------------
@@ -75,12 +56,14 @@ def get_status_by_time(event_type, current_dt):
 # LOG
 # -------------------------------
 def log_event(name, status):
-    timestamp = datetime.now().strftime('%d/%m/%Y %H:%M:%S')
+    event_dt = datetime.now()
+    timestamp = event_dt.strftime("%d/%m/%Y %H:%M:%S")
 
-    with open("attendance_logs.txt", "a", encoding="utf-8") as f:
-        f.write(f"{timestamp} - {name} - {status}\n")
+    with open("attendance_logs.txt", "a", encoding="utf-8") as file_obj:
+        file_obj.write(f"{timestamp} - {name} - {status}\n")
 
-    print(f"📝 {name} -> {status}")
+    log_attendance_event(name, status, event_dt)
+    print(f"{name} -> {status}")
 
 
 # -------------------------------
@@ -91,35 +74,31 @@ def save_new_face(face_encoding, known_encodings, known_names):
         matches = face_recognition.compare_faces(known_encodings, face_encoding, tolerance=0.5)
         if True in matches:
             match_index = matches.index(True)
-            print(f"⚠️ Already registered as {known_names[match_index]}")
+            print(f"Already registered as {known_names[match_index]}")
             return None
 
     name = input("Enter name: ").strip()
     if not name:
         return None
 
-    conn = sqlite3.connect('face_records.db')
-    cursor = conn.cursor()
-
     encoding_json = json.dumps(face_encoding.tolist())
-    cursor.execute("INSERT INTO users (name, face_vector) VALUES (?, ?)", (name, encoding_json))
+    insert_user(name, encoding_json)
 
-    conn.commit()
-    conn.close()
-
-    print(f"✅ {name} added")
+    print(f"{name} added")
     return name
 
 
 # -------------------------------
 # INIT
 # -------------------------------
+init_db()
 known_encodings, known_names = load_registered_faces()
 
 color_dictionary = {}
 last_seen = {}
 user_status = {}
-user_entry_time = {}  # 🔥 giriş saatleri
+user_entry_time = {}
+
 
 def get_color(name):
     if name == "Unknown":
@@ -129,7 +108,7 @@ def get_color(name):
         color_dictionary[name] = (
             random.randint(0, 255),
             random.randint(150, 255),
-            random.randint(0, 255)
+            random.randint(0, 255),
         )
     return color_dictionary[name]
 
@@ -145,6 +124,7 @@ face_names = []
 frame_counter = 0
 
 print("System Active | s=save | q=quit")
+
 
 # -------------------------------
 # MAIN LOOP
@@ -172,7 +152,7 @@ while True:
                 distances = face_recognition.face_distance(known_encodings, face_encoding)
 
                 if len(distances) > 0:
-                    best_match = np.argmin(distances)
+                    best_match = distances.argmin()
                     if matches[best_match]:
                         name = known_names[best_match]
 
@@ -180,8 +160,6 @@ while True:
 
             if name != "Unknown":
                 if name not in last_seen or (current_time - last_seen[name]).total_seconds() > 180:
-
-                    # CHECK-IN
                     if name not in user_status or user_status[name] == "OUT":
                         event_type = "CHECK-IN"
                         user_status[name] = "IN"
@@ -189,13 +167,10 @@ while True:
 
                         status = get_status_by_time(event_type, current_time)
                         log_event(name, status)
-
-                    # CHECK-OUT
                     else:
                         event_type = "CHECK-OUT"
                         user_status[name] = "OUT"
 
-                        # çalışma süresi hesapla
                         if name in user_entry_time:
                             work_duration = current_time - user_entry_time[name]
                             hours = work_duration.total_seconds() / 3600
@@ -214,7 +189,6 @@ while True:
 
     frame_counter += 1
 
-    # DRAW
     for (top, right, bottom, left), name in zip(face_locations, face_names):
         top *= 4
         right *= 4
@@ -226,19 +200,26 @@ while True:
         cv2.rectangle(frame, (left, top), (right, bottom), color, 2)
         cv2.rectangle(frame, (left, bottom - 30), (right, bottom), color, cv2.FILLED)
 
-        cv2.putText(frame, name, (left + 5, bottom - 10),
-                    cv2.FONT_HERSHEY_DUPLEX, 0.7, (255, 255, 255), 1)
+        cv2.putText(
+            frame,
+            name,
+            (left + 5, bottom - 10),
+            cv2.FONT_HERSHEY_DUPLEX,
+            0.7,
+            (255, 255, 255),
+            1,
+        )
 
     cv2.imshow("Face Recognition System", frame)
 
     key = cv2.waitKey(1) & 0xFF
 
-    if key == ord('s') and len(face_encodings) > 0:
+    if key == ord("s") and len(face_encodings) > 0:
         new_person = save_new_face(face_encodings[0], known_encodings, known_names)
         if new_person:
             known_encodings, known_names = load_registered_faces()
 
-    elif key == ord('q'):
+    elif key == ord("q"):
         break
 
 video_capture.release()

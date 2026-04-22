@@ -1,12 +1,10 @@
-import sqlite3
+from database_utils import deactivate_or_delete_user, fetch_registered_users, init_db
 
 def manage_records():
-    conn = sqlite3.connect('face_records.db')
-    cursor = conn.cursor()
+    init_db()
     
     while True:
-        cursor.execute("SELECT id, name FROM users")
-        records = cursor.fetchall()
+        records = fetch_registered_users()
         
         print("\n" + "="*30)
         print("   REGISTERED USERS LIST")
@@ -23,12 +21,15 @@ def manage_records():
         
         if choice.lower() == 'q':
             break
-            
-        cursor.execute("DELETE FROM users WHERE id = ?", (choice,))
-        conn.commit()
-        print(f"Record {choice} deleted.")
 
-    conn.close()
+        if not choice.isdigit():
+            print("Please enter a numeric ID.")
+            continue
+
+        if deactivate_or_delete_user(int(choice)):
+            print(f"Record {choice} deleted.")
+        else:
+            print(f"Record {choice} was not found.")
 
 if __name__ == "__main__":
     manage_records()

@@ -47,17 +47,88 @@ class AttendanceRecord:
 
 
 def load_registered_users() -> list[dict[str, Any]]:
-    # Database parsing happens here. The dashboard reads the existing SQLite
-    # `users` table directly and never writes back to the recognition project.
     if not DB_PATH.exists():
         return []
 
     with sqlite3.connect(DB_PATH) as connection:
         cursor = connection.cursor()
+        if table_exists(cursor, "employees"):
+            cursor.execute(
+                """
+                SELECT id, full_name, status, photo_path
+                FROM employees
+                ORDER BY full_name COLLATE NOCASE, id
+                """
+            )
+            rows = cursor.fetchall()
+            return [
+                {
+                    "id": row[0],
+                    "name": row[1],
+                    "status": row[2],
+                    "photo_path": row[3],
+                    "face_registered": row[2] == "active",
+                }
+                for row in rows
+            ]
+
         cursor.execute("SELECT id, name FROM users ORDER BY name COLLATE NOCASE, id")
         rows = cursor.fetchall()
 
-    return [{"id": row[0], "name": row[1], "face_registered": True} for row in rows]
+    return [{"id": row[0], "name": row[1], "status": "active", "photo_path": None, "face_registered": True} for row in rows]
+
+
+def table_exists(cursor: sqlite3.Cursor, table_name: str) -> bool:
+    cursor.execute("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?", (table_name,))
+    return cursor.fetchone() is not None
+
+
+def load_structured_attendance_records() -> list[AttendanceRecord]:
+    if not DB_PATH.exists():
+        return []
+
+    with sqlite3.connect(DB_PATH) as connection:
+        cursor = connection.cursor()
+        if not table_exists(cursor, "attendance_logs") or not table_exists(cursor, "employees"):
+            return []
+
+        cursor.execute(
+            """
+            SELECT
+                attendance_logs.employee_id,
+                employees.full_name,
+                attendance_logs.date,
+                attendance_logs.entry_time,
+                attendance_logs.exit_time,
+                attendance_logs.attendance_status
+            FROM attendance_logs
+            INNER JOIN employees ON employees.id = attendance_logs.employee_id
+            ORDER BY attendance_logs.date DESC, employees.full_name COLLATE NOCASE
+            """
+        )
+        rows = cursor.fetchall()
+
+    records: list[AttendanceRecord] = []
+    for row in rows:
+        notes = build_structured_attendance_notes(row[5], row[3], row[4])
+        current_status = derive_structured_current_status(row[3], row[4], row[5])
+        last_event_type = "CHECK-OUT" if row[4] else "CHECK-IN" if row[3] else "UNKNOWN"
+        events = build_structured_event_list(row[1], row[2], row[3], row[4], row[5])
+        records.append(
+            AttendanceRecord(
+                employee_id=row[0],
+                employee_name=row[1],
+                work_date=row[2],
+                entry_time=row[3],
+                exit_time=row[4],
+                current_status=current_status,
+                last_event_type=last_event_type,
+                notes=notes,
+                events=events,
+            )
+        )
+
+    return records
 
 
 def parse_log_events() -> list[dict[str, Any]]:
@@ -244,10 +315,81 @@ def collect_record_notes(events: list[dict[str, Any]], current_status: str) -> l
     return notes
 
 
+def build_structured_attendance_notes(
+    attendance_status: str,
+    entry_time: str | None,
+    exit_time: str | None,
+) -> list[str]:
+    notes: list[str] = []
+    if not exit_time and entry_time:
+        notes.append("No check-out event recorded yet for this day.")
+    if attendance_status == "late":
+        notes.append("Includes a late check-in.")
+    if attendance_status == "absent":
+        notes.append("Marked absent.")
+    return notes
+
+
+def derive_structured_current_status(
+    entry_time: str | None,
+    exit_time: str | None,
+    attendance_status: str,
+) -> str:
+    if attendance_status == "absent":
+        return "Absent"
+    if exit_time:
+        return "Checked Out"
+    if entry_time:
+        return "Still Inside"
+    return "No activity"
+
+
+def build_structured_event_list(
+    employee_name: str,
+    work_date: str,
+    entry_time: str | None,
+    exit_time: str | None,
+    attendance_status: str,
+) -> list[dict[str, Any]]:
+    events: list[dict[str, Any]] = []
+    if exit_time:
+        events.append(
+            {
+                "id": f"db-{employee_name}-{work_date}-exit",
+                "timestamp": f"{work_date}T{exit_time}",
+                "date": work_date,
+                "time": exit_time,
+                "employee_name": employee_name,
+                "status": "CHECK-OUT",
+                "event_type": "CHECK-OUT",
+                "status_group": "checkout",
+                "notes": [],
+                "raw": "Structured database record",
+            }
+        )
+    if entry_time:
+        entry_status = "WARNING: Late" if attendance_status == "late" else "CHECK-IN"
+        events.append(
+            {
+                "id": f"db-{employee_name}-{work_date}-entry",
+                "timestamp": f"{work_date}T{entry_time}",
+                "date": work_date,
+                "time": entry_time,
+                "employee_name": employee_name,
+                "status": entry_status,
+                "event_type": "CHECK-IN",
+                "status_group": "late" if attendance_status == "late" else "checkin",
+                "notes": build_structured_attendance_notes(attendance_status, entry_time, exit_time),
+                "raw": "Structured database record",
+            }
+        )
+    return events
+
+
 def get_dashboard_data() -> dict[str, Any]:
     users = load_registered_users()
     events = parse_log_events()
-    records = build_attendance_records(events, users)
+    records = load_structured_attendance_records() or build_attendance_records(events, users)
     today = date.today().strftime(API_DATE_FORMAT)
     todays_records = [record for record in records if record.work_date == today]
     latest_detection = serialize_event(events[0]) if events else None
