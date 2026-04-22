@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any
 
 
-PROJECT_SOURCE_DIR = Path(__file__).resolve().parents[2] / "Face-Recognation-Based-Tracking-System-main"
+PROJECT_SOURCE_DIR = Path(__file__).resolve().parents[2]
 DB_PATH = PROJECT_SOURCE_DIR / "face_records.db"
 LOG_PATH = PROJECT_SOURCE_DIR / "attendance_logs.txt"
 MAIN_SCRIPT_PATH = PROJECT_SOURCE_DIR / "main_recognition.py"

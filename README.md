@@ -1,163 +1,54 @@
 # Face Recognition Based Tracking System
 
-This project is a real-time face recognition system developed using Python. It utilizes computer vision techniques to detect and recognize faces through a webcam, store facial data in a database, and log detection events.
+This project is a working Python face recognition and attendance tracking system. The cleanup in this repository keeps the existing camera, registration, recognition, database, and attendance log behavior intact while making the folder layout easier to follow.
 
+## Main Application Files
 
+- `main_recognition.py`: real-time recognition and attendance logging
+- `register_face.py`: manual face registration
+- `delete_record.py`: registered user deletion utility
+- `camera_test.py`: camera and face detection test
+- `setup_database.py`: SQLite table initialization
 
-## Features
+## Data Files
 
-- Real-time face detection using a webcam  
-- Face recognition based on encoded facial features  
-- SQLite database integration for storing user data  
-- Ability to register new faces dynamically  
-- Duplicate face detection prevention  
-- User management (delete records)  
-- Logging system for recognized individuals  
-- Performance optimizations for smoother processing  
+- `face_records.db`: live SQLite database used by the app
+- `attendance_logs.txt`: live attendance log written by the recognition flow
 
+## Dashboard
 
+The dashboard lives in `web-dashboard/` and reads the root `face_records.db`, `attendance_logs.txt`, and `main_recognition.py` files in read-only mode.
 
-## Technologies Used
-
-- Python  
-- OpenCV  
-- face_recognition  
-- dlib  
-- SQLite  
-- NumPy  
-
-
-
-## Installation
-
-### Clone the repository
-```bash
-git clone https://github.com/EthemKesim/https://github.com/EthemKesim/Face-Recognation-Based-Tracking-System.git
-cd PROJE FACE RECO
-````
-
-### Install dependencies
+Run it with:
 
 ```bash
-pip install face-recognation
-pip install dlib-bin
-pip install face-recognation --no-deps
+cd web-dashboard
+python run_dashboard.py
 ```
 
-
-
-## Setup
-
-Initialize the database by running:
-
-```bash
-python setup_database.py
-```
-
-This will create the required SQLite database file (`face_records.db`).
-
-
-
-## Usage
-
-### Run the main recognition system
-
-```bash
-python main_recognation.py
-```
-
-Controls:
-
-* Press `s` to save a new face
-* Press `q` to quit
-
-
-
-### Register a new face manually
-
-```bash
-python register_face.py
-```
-
-Controls:
-
-* Press `s` to capture and save
-* Press `q` to quit
-
-
-
-### Test camera and face detection
-
-```bash
-python camera_test.py
-```
-
-This module allows testing of face detection without storing any data.
-
-
-
-### Delete registered users
-
-```bash
-python delete_record.py
-```
-
-Displays all registered users and allows deletion by ID.
-
-
+Then open `http://127.0.0.1:8000`.
 
 ## Project Structure
 
+```text
+.
+|-- main_recognition.py
+|-- register_face.py
+|-- delete_record.py
+|-- camera_test.py
+|-- setup_database.py
+|-- face_records.db
+|-- attendance_logs.txt
+|-- web-dashboard/
+|   |-- backend/
+|   |-- frontend/
+|   `-- runtime_logs/
+`-- legacy/
+    `-- duplicate_project_snapshot/
 ```
-├── main_recognation.py
-├── register_face.py
-├── delete_record.py
-├── camera_test.py
-├── setup_database.py
-├── face_records.db
-├── access_logs.txt
-```
-
-
-
-## System Overview
-
-* The system captures frames from a webcam
-* Faces are detected and converted into numerical encoding vectors
-* These vectors are stored in a SQLite database
-* Incoming faces are compared with stored encodings
-* If a match is found, the corresponding name is displayed
-* If no match is found, the face is labeled as unknown and can be registered
-* Recognized faces are logged with timestamps
-
-
-
-## Logging
-
-Detected individuals are recorded in the `access_logs.txt` file along with timestamps.
-
-
-## Performance Optimizations
-
-* Frame resizing to reduce processing load
-* Processing every third frame instead of every frame
-* Reduced camera resolution for improved FPS
-
-
 
 ## Notes
 
-* A functional webcam is required
-* Adequate lighting conditions improve recognition accuracy
-* Duplicate entries are restricted by encoding comparison
-* Recognition tolerance can be adjusted in the code
-
-
-
-## Future Improvements
-
-* Graphical user interface
-* Multi-camera support
-* Cloud-based database integration
-* Attendance tracking features
-
+- The root database and log files are the active source of truth.
+- `legacy/duplicate_project_snapshot/` stores the older duplicate copy safely for reference.
+- `web-dashboard/runtime_logs/` stores dashboard runtime log artifacts to keep the main folder clean.
