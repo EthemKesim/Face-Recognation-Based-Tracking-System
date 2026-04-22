@@ -1,36 +1,115 @@
 # Face Recognition Based Tracking System
 
-This project is a working Python face recognition and attendance tracking system. The cleanup in this repository keeps the existing camera, registration, recognition, database, and attendance log behavior intact while making the folder layout easier to follow.
+## Overview
+
+This project is a real-time **face recognition and attendance tracking system** built with Python. It detects and recognizes faces through a webcam, stores user data in a SQLite database, and logs attendance events automatically.
+
+In addition to the core Python system, the project includes a **local web dashboard** that allows monitoring attendance data in a more user-friendly way.
+
+The system has been organized and cleaned while preserving all working functionality.
+
+---
+
+## Features
+
+### Core System (Python)
+
+* Real-time face detection and recognition via webcam
+* Face registration system
+* Duplicate face detection prevention
+* SQLite database integration
+* Automatic attendance logging
+* Simple user management (add/delete)
+* Performance optimizations for smoother processing
+
+### Web Dashboard (Local)
+
+* View attendance logs in a structured format
+* Read data from the main database and log file
+* Clean separation between backend and frontend
+* Lightweight and easy to run locally
+
+---
+
+## Technologies Used
+
+* Python
+* OpenCV
+* face_recognition
+* dlib
+* SQLite
+* NumPy
+* HTML, CSS, JavaScript (Dashboard)
+* Flask / lightweight backend (dashboard)
+
+---
+
+## How the System Works
+
+### 1. Face Registration
+
+* Run `register_face.py`
+* Capture a new user's face via webcam
+* Encode facial features
+* Store data in `face_records.db`
+
+### 2. Face Recognition & Attendance
+
+* Run `main_recognition.py`
+* Webcam starts and detects faces in real-time
+* If a face matches:
+
+  * The person's name is identified
+  * Entry is logged in `attendance_logs.txt`
+* Prevents duplicate logging within a short period
+
+### 3. Data Storage
+
+* `face_records.db` → stores registered users
+* `attendance_logs.txt` → stores attendance records
+
+---
 
 ## Main Application Files
 
-- `main_recognition.py`: real-time recognition and attendance logging
-- `register_face.py`: manual face registration
-- `delete_record.py`: registered user deletion utility
-- `camera_test.py`: camera and face detection test
-- `setup_database.py`: SQLite table initialization
+* `main_recognition.py` → Real-time recognition & attendance logging
+* `register_face.py` → Add new users
+* `delete_record.py` → Delete users
+* `camera_test.py` → Test camera and detection
+* `setup_database.py` → Initialize database
 
-## Data Files
+---
 
-- `face_records.db`: live SQLite database used by the app
-- `attendance_logs.txt`: live attendance log written by the recognition flow
+## Web Dashboard
 
-## Dashboard
+The dashboard provides a local interface to view attendance data.
 
-The dashboard lives in `web-dashboard/` and reads the root `face_records.db`, `attendance_logs.txt`, and `main_recognition.py` files in read-only mode.
+### How it works
 
-Run it with:
+* Reads:
+
+  * `face_records.db`
+  * `attendance_logs.txt`
+* Does **not modify core system data (read-only)**
+
+### Run the dashboard
 
 ```bash
 cd web-dashboard
 python run_dashboard.py
 ```
 
-Then open `http://127.0.0.1:8000`.
+Then open:
+
+```
+http://127.0.0.1:8000
+```
+
+---
 
 ## Project Structure
 
-```text
+```
 .
 |-- main_recognition.py
 |-- register_face.py
@@ -43,12 +122,5 @@ Then open `http://127.0.0.1:8000`.
 |   |-- backend/
 |   |-- frontend/
 |   `-- runtime_logs/
-`-- legacy/
-    `-- duplicate_project_snapshot/
+
 ```
-
-## Notes
-
-- The root database and log files are the active source of truth.
-- `legacy/duplicate_project_snapshot/` stores the older duplicate copy safely for reference.
-- `web-dashboard/runtime_logs/` stores dashboard runtime log artifacts to keep the main folder clean.
