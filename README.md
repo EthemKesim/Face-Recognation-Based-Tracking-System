@@ -8,7 +8,7 @@ In addition to the core Python system, the project includes a **local web dashbo
 
 The system has been organized and cleaned while preserving all working functionality.
 
----
+
 
 ## Features
 
@@ -29,7 +29,7 @@ The system has been organized and cleaned while preserving all working functiona
 * Clean separation between backend and frontend
 * Lightweight and easy to run locally
 
----
+
 
 ## Technologies Used
 
@@ -42,7 +42,7 @@ The system has been organized and cleaned while preserving all working functiona
 * HTML, CSS, JavaScript (Dashboard)
 * Flask / lightweight backend (dashboard)
 
----
+
 
 ## How the System Works
 
@@ -68,7 +68,7 @@ The system has been organized and cleaned while preserving all working functiona
 * `face_records.db` → stores registered users
 * `attendance_logs.txt` → stores attendance records
 
----
+
 
 ## Main Application Files
 
@@ -78,7 +78,7 @@ The system has been organized and cleaned while preserving all working functiona
 * `camera_test.py` → Test camera and detection
 * `setup_database.py` → Initialize database
 
----
+
 
 ## Web Dashboard
 
