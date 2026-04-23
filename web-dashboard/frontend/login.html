@@ -1,0 +1,113 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Admin Login | Attendance Dashboard</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&family=Plus+Jakarta+Sans:wght@500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <main class="auth-shell">
+    <section class="auth-card">
+      <div class="auth-copy">
+        <p class="brand-eyebrow">Local Admin Access</p>
+        <h1>Face Attendance Dashboard</h1>
+        <p class="helper-copy">Sign in with the admin credentials defined in your local <code>.env</code> file.</p>
+      </div>
+
+      <form id="login-form" class="auth-form">
+        <label class="field-group">
+          <span class="input-label">Username</span>
+          <input type="text" name="username" autocomplete="username" required>
+        </label>
+
+        <label class="field-group">
+          <span class="input-label">Password</span>
+          <input type="password" name="password" autocomplete="current-password" required>
+        </label>
+
+        <div id="login-error" class="feedback-banner error auth-feedback" hidden></div>
+        <button id="login-button" class="primary-button" type="submit">Login</button>
+      </form>
+    </section>
+  </main>
+
+  <script>
+    const form = document.getElementById("login-form");
+    const button = document.getElementById("login-button");
+    const errorBanner = document.getElementById("login-error");
+
+    async function api(path, options = {}) {
+      const response = await fetch(path, {
+        cache: "no-store",
+        ...options,
+        headers: {
+          ...(options.headers || {}),
+        },
+      });
+
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        throw new Error(payload.error || "Request failed.");
+      }
+
+      return payload;
+    }
+
+    function showError(message) {
+      errorBanner.hidden = false;
+      errorBanner.textContent = message;
+      errorBanner.classList.add("show");
+    }
+
+    function clearError() {
+      errorBanner.hidden = true;
+      errorBanner.textContent = "";
+      errorBanner.classList.remove("show");
+    }
+
+    form.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      clearError();
+
+      if (!form.reportValidity()) {
+        return;
+      }
+
+      button.disabled = true;
+      button.textContent = "Signing in...";
+
+      const formData = new FormData(form);
+      try {
+        await api("/api/auth/login", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            username: formData.get("username"),
+            password: formData.get("password"),
+          }),
+        });
+        window.location.href = "/";
+      } catch (error) {
+        form.elements.password.value = "";
+        showError(error.message);
+        form.elements.password.focus();
+      } finally {
+        button.disabled = false;
+        button.textContent = "Login";
+      }
+    });
+
+    api("/api/auth/session")
+      .then((session) => {
+        if (session.authenticated) {
+          window.location.href = "/";
+        }
+      })
+      .catch(() => {});
+  </script>
+</body>
+</html>

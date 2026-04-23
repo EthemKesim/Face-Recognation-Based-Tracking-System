@@ -1,5 +1,8 @@
 __pycache__/
 *.py[cod]
+.env
+.env.*
+!.env.example
 
 web-dashboard/runtime_logs/
 web-dashboard/backend/__pycache__/

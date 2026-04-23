@@ -15,7 +15,7 @@
       <div class="brand">
         <p class="brand-eyebrow">Local Admin Panel</p>
         <h1>Face Attendance</h1>
-        <p class="brand-copy">Read-only dashboard powered by your existing Python recognition system.</p>
+        <p class="brand-copy">Protected dashboard powered by your existing Python recognition system.</p>
       </div>
 
       <nav class="nav">
@@ -39,7 +39,7 @@
         <div class="topbar-copy">
           <p class="eyebrow">Monitoring</p>
           <h2 id="page-title">Dashboard</h2>
-          <p class="topbar-subtitle">Professional read-only operations view for your live face recognition attendance data.</p>
+          <p id="topbar-subtitle" class="topbar-subtitle">Professional admin view for your live face recognition attendance data.</p>
         </div>
         <div class="topbar-actions">
           <div class="status-pill">
@@ -47,10 +47,16 @@
             <span>Live sync</span>
           </div>
           <div class="topbar-meta">
+            <span id="session-user">Logged in as admin</span>
+          </div>
+          <div class="topbar-meta">
             <span id="last-refresh">Waiting for data</span>
           </div>
+          <button id="logout-button" class="secondary-button" type="button">Logout</button>
         </div>
       </header>
+
+      <div id="feedback-banner" class="feedback-banner" aria-live="polite"></div>
 
       <section class="view active" data-view-panel="dashboard">
         <div class="summary-grid" id="summary-cards"></div>
@@ -113,7 +119,7 @@
             </div>
             <form id="attendance-filters" class="filter-row">
               <input type="search" name="search" placeholder="Search employee name">
-              <input type="date" name="date">
+              <input type="date" name="date" aria-label="Filter attendance records by date" title="Filter attendance records by date">
               <select name="status">
                 <option value="">All statuses</option>
                 <option value="Still Inside">Still Inside</option>
@@ -173,7 +179,7 @@
                   <th>Face Registered</th>
                   <th>Last Seen</th>
                   <th>Current Status</th>
-                  <th>Details</th>
+                  <th>Actions</th>
                 </tr>
               </thead>
               <tbody id="employees-body"></tbody>
@@ -191,7 +197,7 @@
             </div>
             <form id="log-filters" class="filter-row">
               <input type="search" name="search" placeholder="Search employee name">
-              <input type="date" name="date">
+              <input type="date" name="date" aria-label="Filter activity logs by date" title="Filter activity logs by date">
               <select name="status">
                 <option value="">All event types</option>
                 <option value="CHECK-IN">CHECK-IN</option>
@@ -231,6 +237,18 @@
         <button id="modal-close" class="icon-button" aria-label="Close">&times;</button>
       </div>
       <div id="modal-content" class="modal-content"></div>
+    </div>
+  </dialog>
+
+  <dialog id="confirm-dialog" class="modal confirm-dialog">
+    <div class="confirm-card">
+      <div class="confirm-badge">Delete Employee</div>
+      <h3 id="confirm-title">Are you sure you want to delete this employee?</h3>
+      <p id="confirm-message" class="confirm-message"></p>
+      <div class="confirm-actions">
+        <button id="confirm-cancel" class="secondary-button" type="button">Cancel</button>
+        <button id="confirm-accept" class="danger-button" type="button">Delete</button>
+      </div>
     </div>
   </dialog>
 

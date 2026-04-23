@@ -1,4 +1,4 @@
-from database_utils import deactivate_or_delete_user, fetch_registered_users, init_db
+from database_utils import delete_employee_record, fetch_registered_users, init_db
 
 def manage_records():
     init_db()
@@ -26,10 +26,13 @@ def manage_records():
             print("Please enter a numeric ID.")
             continue
 
-        if deactivate_or_delete_user(int(choice)):
-            print(f"Record {choice} deleted.")
+        result = delete_employee_record(int(choice))
+        if result["deleted"]:
+            print(f'Record {choice} deleted for {result["employee_name"]}.')
+            if result.get("warning"):
+                print(result["warning"])
         else:
-            print(f"Record {choice} was not found.")
+            print(result["error"])
 
 if __name__ == "__main__":
     manage_records()

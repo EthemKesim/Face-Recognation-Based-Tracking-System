@@ -6,8 +6,9 @@ from pathlib import Path
 from typing import Any
 
 
-DB_PATH = Path("face_records.db")
-LOG_PATH = Path("attendance_logs.txt")
+PROJECT_ROOT = Path(__file__).resolve().parent
+DB_PATH = PROJECT_ROOT / "face_records.db"
+LOG_PATH = PROJECT_ROOT / "attendance_logs.txt"
 LOG_DATETIME_FORMAT = "%d/%m/%Y %H:%M:%S"
 
 
@@ -196,18 +197,84 @@ def fetch_registered_users() -> list[sqlite3.Row]:
         return cursor.fetchall()
 
 
-def deactivate_or_delete_user(user_id: int) -> bool:
+def get_registered_user(cursor: sqlite3.Cursor, user_id: int) -> sqlite3.Row | None:
+    cursor.execute("SELECT id, name FROM users WHERE id = ?", (user_id,))
+    return cursor.fetchone()
+
+
+def get_employee(cursor: sqlite3.Cursor, user_id: int) -> sqlite3.Row | None:
+    cursor.execute("SELECT id, full_name, photo_path FROM employees WHERE id = ?", (user_id,))
+    return cursor.fetchone()
+
+
+def resolve_managed_file_path(path_value: str | None) -> Path | None:
+    if not path_value:
+        return None
+
+    candidate = Path(path_value.strip())
+    if not candidate.is_absolute():
+        candidate = (PROJECT_ROOT / candidate).resolve()
+    else:
+        candidate = candidate.resolve()
+
+    try:
+        candidate.relative_to(PROJECT_ROOT)
+    except ValueError:
+        return None
+
+    return candidate
+
+
+def delete_employee_record(user_id: int) -> dict[str, Any]:
     with get_connection() as connection:
         cursor = connection.cursor()
-        cursor.execute("SELECT id FROM users WHERE id = ?", (user_id,))
-        row = cursor.fetchone()
-        if row is None:
-            return False
+        user = get_registered_user(cursor, user_id)
+        employee = get_employee(cursor, user_id)
 
+        if user is None and employee is None:
+            return {"deleted": False, "error": "Employee record was not found."}
+
+        employee_name = (
+            employee["full_name"]
+            if employee is not None and employee["full_name"]
+            else user["name"]
+            if user is not None
+            else f"Employee {user_id}"
+        )
+        photo_candidate = resolve_managed_file_path(employee["photo_path"] if employee is not None else None)
+
+        cursor.execute("DELETE FROM attendance_logs WHERE employee_id = ?", (user_id,))
+        deleted_attendance_rows = cursor.rowcount
+        cursor.execute("DELETE FROM employees WHERE id = ?", (user_id,))
+        deleted_employee_rows = cursor.rowcount
         cursor.execute("DELETE FROM users WHERE id = ?", (user_id,))
-        cursor.execute("UPDATE employees SET status = 'inactive' WHERE id = ?", (user_id,))
+        deleted_user_rows = cursor.rowcount
         connection.commit()
-        return True
+
+    deleted_photo_path = None
+    photo_warning = None
+
+    if photo_candidate and photo_candidate.exists() and photo_candidate.is_file():
+        try:
+            photo_candidate.unlink()
+            deleted_photo_path = str(photo_candidate)
+        except OSError as exc:
+            photo_warning = f"Employee data was deleted, but the photo file could not be removed: {exc}"
+
+    return {
+        "deleted": True,
+        "employee_id": user_id,
+        "employee_name": employee_name,
+        "deleted_attendance_rows": deleted_attendance_rows,
+        "deleted_user_rows": deleted_user_rows,
+        "deleted_employee_rows": deleted_employee_rows,
+        "deleted_photo_path": deleted_photo_path,
+        "warning": photo_warning,
+    }
+
+
+def deactivate_or_delete_user(user_id: int) -> bool:
+    return bool(delete_employee_record(user_id)["deleted"])
 
 
 def log_attendance_event(name: str, status: str, event_dt: datetime) -> int | None:
