@@ -1,226 +1,147 @@
 import cv2
 import face_recognition
 import json
-import random
+import numpy as np
+import os
 from datetime import datetime, time
-
+from liveness_utils import check_liveness, is_fake_texture
 from database_utils import init_db, insert_user, load_registered_faces, log_attendance_event
 
+# -------------------------------
+# SETTINGS & CONSTANTS
+# -------------------------------
+KNOWN_ENCODINGS, KNOWN_NAMES = load_registered_faces()
+LIVENESS_STATUS = {} 
+LAST_SEEN = {}         
+FRAME_COUNTER = 0
+LOG_FILE = "attendance_logs.txt" 
 
 # -------------------------------
 # TIME RULES
 # -------------------------------
 def get_status_by_time(event_type, current_dt):
     current_t = current_dt.time()
-
     morning_warning = time(9, 15)
     morning_violation = time(9, 30)
-
     lunch_start = time(12, 0)
     lunch_end = time(13, 15)
-
-    afternoon_warning = time(13, 30)
-    afternoon_violation = time(13, 45)
-
-    overtime_time = time(18, 0)
-
+    
     if lunch_start <= current_t <= lunch_end:
         return f"{event_type} (Lunch Break)"
-
-    if event_type == "CHECK-IN":
-        if current_t < lunch_start:
-            if current_t > morning_violation:
-                return "VIOLATION: Late (Morning)"
-            elif current_t > morning_warning:
-                return "WARNING: Late (Morning)"
-            else:
-                return "CHECK-IN"
-        else:
-            if current_t > afternoon_violation:
-                return "VIOLATION: Late (Afternoon)"
-            elif current_t > afternoon_warning:
-                return "WARNING: Late (Afternoon)"
-            else:
-                return "CHECK-IN"
-
-    elif event_type == "CHECK-OUT":
-        if current_t > overtime_time:
-            return "CHECK-OUT (After 18:00)"
-        else:
-            return "CHECK-OUT"
-
     return event_type
 
+# -------------------------------
+# TXT LOGGING MECHANIC
+# -------------------------------
+def log_to_txt(name, status, dt):
+    with open(LOG_FILE, "a", encoding="utf-8") as f:
+        timestamp = dt.strftime("%Y-%m-%d %H:%M:%S")
+        log_entry = f"[{timestamp}] Name: {name} | Status: {status}\n"
+        f.write(log_entry)
 
 # -------------------------------
-# LOG
+# UI HELPERS
 # -------------------------------
-def log_event(name, status):
-    event_dt = datetime.now()
-    timestamp = event_dt.strftime("%d/%m/%Y %H:%M:%S")
-
-    with open("attendance_logs.txt", "a", encoding="utf-8") as file_obj:
-        file_obj.write(f"{timestamp} - {name} - {status}\n")
-
-    log_attendance_event(name, status, event_dt)
-    print(f"{name} -> {status}")
-
-
-# -------------------------------
-# SAVE FACE
-# -------------------------------
-def save_new_face(face_encoding, known_encodings, known_names):
-    if known_encodings:
-        matches = face_recognition.compare_faces(known_encodings, face_encoding, tolerance=0.5)
-        if True in matches:
-            match_index = matches.index(True)
-            print(f"Already registered as {known_names[match_index]}")
-            return None
-
-    name = input("Enter name: ").strip()
-    if not name:
-        return None
-
-    encoding_json = json.dumps(face_encoding.tolist())
-    insert_user(name, encoding_json)
-
-    print(f"{name} added")
-    return name
-
-
-# -------------------------------
-# INIT
-# -------------------------------
-init_db()
-known_encodings, known_names = load_registered_faces()
-
-color_dictionary = {}
-last_seen = {}
-user_status = {}
-user_entry_time = {}
-
-
-def get_color(name):
-    if name == "Unknown":
+def get_color(display_name):
+    if "SPOOFING!" in display_name or "Unknown" in display_name:
         return (0, 0, 255)
-
-    if name not in color_dictionary:
-        color_dictionary[name] = (
-            random.randint(0, 255),
-            random.randint(150, 255),
-            random.randint(0, 255),
-        )
-    return color_dictionary[name]
-
-
-# -------------------------------
-# CAMERA
-# -------------------------------
-video_capture = cv2.VideoCapture(0)
-
-face_locations = []
-face_encodings = []
-face_names = []
-frame_counter = 0
-
-print("System Active | s=save | q=quit")
-
+    if "(Blink)" in display_name:
+        return (0, 255, 255)
+    return (0, 255, 0)
 
 # -------------------------------
 # MAIN LOOP
 # -------------------------------
-while True:
-    ret, frame = video_capture.read()
-    if not ret:
-        break
+def run_recognition():
+    global KNOWN_ENCODINGS, KNOWN_NAMES, FRAME_COUNTER
+    
+    video_capture = cv2.VideoCapture(0)
+    current_face_results = []
+    
+    print(f"System Started. Logging to both DB and {LOG_FILE}")
 
-    small_frame = cv2.resize(frame, (0, 0), fx=0.25, fy=0.25)
-    rgb_small_frame = cv2.cvtColor(small_frame, cv2.COLOR_BGR2RGB)
+    while True:
+        ret, frame = video_capture.read()
+        if not ret: break
 
-    if frame_counter % 3 == 0:
-        face_locations = face_recognition.face_locations(rgb_small_frame)
-        face_encodings = face_recognition.face_encodings(rgb_small_frame, face_locations)
+        if FRAME_COUNTER % 2 == 0:
+            small_frame = cv2.resize(frame, (0, 0), fx=0.25, fy=0.25)
+            rgb_small_frame = cv2.cvtColor(small_frame, cv2.COLOR_BGR2RGB)
 
-        face_names = []
-        current_time = datetime.now()
+            face_locations = face_recognition.face_locations(rgb_small_frame)
+            face_encodings = face_recognition.face_encodings(rgb_small_frame, face_locations)
 
-        for face_encoding in face_encodings:
-            name = "Unknown"
+            current_face_results = []
+            
+            for i, (face_loc, face_encoding) in enumerate(zip(face_locations, face_encodings)):
+                top, right, bottom, left = face_loc
+                top *= 4; right *= 4; bottom *= 4; left *= 4
+                
+                matches = face_recognition.compare_faces(KNOWN_ENCODINGS, face_encoding)
+                name = "Unknown"
 
-            if known_encodings:
-                matches = face_recognition.compare_faces(known_encodings, face_encoding, tolerance=0.55)
-                distances = face_recognition.face_distance(known_encodings, face_encoding)
+                if True in matches:
+                    first_match_index = matches.index(True)
+                    actual_name = KNOWN_NAMES[first_match_index]
+                    
+                    ear, lap_var = check_liveness(frame, (top, right, bottom, left))
+                    
+                    if i not in LIVENESS_STATUS:
+                        LIVENESS_STATUS[i] = False
 
-                if len(distances) > 0:
-                    best_match = distances.argmin()
-                    if matches[best_match]:
-                        name = known_names[best_match]
-
-            face_names.append(name)
-
-            if name != "Unknown":
-                if name not in last_seen or (current_time - last_seen[name]).total_seconds() > 180:
-                    if name not in user_status or user_status[name] == "OUT":
-                        event_type = "CHECK-IN"
-                        user_status[name] = "IN"
-                        user_entry_time[name] = current_time
-
-                        status = get_status_by_time(event_type, current_time)
-                        log_event(name, status)
+                    if is_fake_texture(lap_var, threshold=115):
+                        display_name = "SPOOFING!"
+                        LIVENESS_STATUS[i] = False
                     else:
-                        event_type = "CHECK-OUT"
-                        user_status[name] = "OUT"
-
-                        if name in user_entry_time:
-                            work_duration = current_time - user_entry_time[name]
-                            hours = work_duration.total_seconds() / 3600
-
-                            if hours > 9:
-                                overtime = hours - 9
-                                status = f"OVERTIME: {overtime:.2f} hours"
-                            else:
-                                status = get_status_by_time(event_type, current_time)
+                        if ear < 0.20:
+                            LIVENESS_STATUS[i] = True
+                        
+                        if LIVENESS_STATUS[i]:
+                            display_name = actual_name
+                            current_time = datetime.now()
+                            
+                            # Duplicate prevention (5 min)
+                            if actual_name not in LAST_SEEN or (current_time - LAST_SEEN[actual_name]).total_seconds() > 300:
+                                status = get_status_by_time("CHECK-IN", current_time)
+                                
+                                # 1. SQLITE LOGGING
+                                log_attendance_event(actual_name, status, current_time)
+                                
+                                # 2. TXT LOGGING 
+                                log_to_txt(actual_name, status, current_time)
+                                
+                                LAST_SEEN[actual_name] = current_time
                         else:
-                            status = get_status_by_time(event_type, current_time)
+                            display_name = f"{actual_name} (Blink)"
+                else:
+                    display_name = "Unknown"
+                
+                current_face_results.append((top, right, bottom, left, display_name))
 
-                        log_event(name, status)
+        FRAME_COUNTER += 1
 
-                    last_seen[name] = current_time
+        for (top, right, bottom, left, display_name) in current_face_results:
+            color = get_color(display_name)
+            cv2.rectangle(frame, (left, top), (right, bottom), color, 2)
+            cv2.rectangle(frame, (left, bottom - 35), (right, bottom), color, cv2.FILLED)
+            cv2.putText(frame, display_name, (left + 6, bottom - 6), 
+                        cv2.FONT_HERSHEY_DUPLEX, 0.6, (255, 255, 255), 1)
 
-    frame_counter += 1
+        cv2.imshow('Face Recognition System', frame)
+        key = cv2.waitKey(1) & 0xFF
 
-    for (top, right, bottom, left), name in zip(face_locations, face_names):
-        top *= 4
-        right *= 4
-        bottom *= 4
-        left *= 4
+        if key == ord('s') and len(face_encodings) > 0:
+            name_input = input("Enter name for new record: ")
+            if name_input:
+                encoding_json = json.dumps(face_encodings[0].tolist())
+                insert_user(name_input, encoding_json)
+                KNOWN_ENCODINGS, KNOWN_NAMES = load_registered_faces()
 
-        color = get_color(name)
+        if key == ord('q'): break
 
-        cv2.rectangle(frame, (left, top), (right, bottom), color, 2)
-        cv2.rectangle(frame, (left, bottom - 30), (right, bottom), color, cv2.FILLED)
+    video_capture.release()
+    cv2.destroyAllWindows()
 
-        cv2.putText(
-            frame,
-            name,
-            (left + 5, bottom - 10),
-            cv2.FONT_HERSHEY_DUPLEX,
-            0.7,
-            (255, 255, 255),
-            1,
-        )
-
-    cv2.imshow("Face Recognition System", frame)
-
-    key = cv2.waitKey(1) & 0xFF
-
-    if key == ord("s") and len(face_encodings) > 0:
-        new_person = save_new_face(face_encodings[0], known_encodings, known_names)
-        if new_person:
-            known_encodings, known_names = load_registered_faces()
-
-    elif key == ord("q"):
-        break
-
-video_capture.release()
-cv2.destroyAllWindows()
+if __name__ == "__main__":
+    init_db()
+    run_recognition()
