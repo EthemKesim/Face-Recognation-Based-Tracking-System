@@ -40,6 +40,13 @@ except ImportError:
 if str(PROJECT_SOURCE_DIR) not in sys.path:
     sys.path.insert(0, str(PROJECT_SOURCE_DIR))
 
+try:
+    import cv2
+    import face_recognition
+    import numpy as np
+except ImportError:
+    cv2 = face_recognition = np = None  # type: ignore[assignment]
+
 from database_utils import (
     delete_employee_record,
     employee_name_exists,
@@ -380,15 +387,8 @@ class DashboardHandler(BaseHTTPRequestHandler):
         self.send_json({"authenticated": True, "username": session["username"]})
 
     def handle_employee_register(self) -> None:
-        try:
-            import cv2
-            import face_recognition
-            import numpy as np
-        except ImportError as exc:
-            self.send_json(
-                {"error": f"Face recognition library not available: {exc}"},
-                status=HTTPStatus.INTERNAL_SERVER_ERROR,
-            )
+        if cv2 is None:
+            self.send_json({"error": "Face recognition library not available."}, status=HTTPStatus.INTERNAL_SERVER_ERROR)
             return
 
         payload = self.read_json_body()
@@ -435,13 +435,10 @@ class DashboardHandler(BaseHTTPRequestHandler):
 
         # Check 2: face encoding similarity against all registered faces
         known_encodings, known_names = load_registered_faces()
-        import sys
-        print(f"[FACE-CHECK] {len(known_encodings)} encoding(s) loaded from DB", file=sys.stderr)
         if known_encodings:
             distances = face_recognition.face_distance(known_encodings, face_encodings[0])
             best_idx = int(distances.argmin())
             best_distance = float(distances[best_idx])
-            print(f"[FACE-CHECK] Best match: '{known_names[best_idx]}' distance={best_distance:.4f}", file=sys.stderr)
             if best_distance < 0.6:
                 matched_name = known_names[best_idx]
                 similarity = round((1 - best_distance) * 100)

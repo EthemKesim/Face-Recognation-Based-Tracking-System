@@ -46,13 +46,6 @@ class AttendanceRecord:
         }
 
 
-def photo_path_to_url(photo_path: str | None) -> str | None:
-    if not photo_path:
-        return None
-    normalized = photo_path.replace("\\", "/").lstrip("/")
-    return "/" + normalized
-
-
 def load_registered_users() -> list[dict[str, Any]]:
     if not DB_PATH.exists():
         return []
@@ -74,7 +67,7 @@ def load_registered_users() -> list[dict[str, Any]]:
                     "name": row[1],
                     "status": row[2],
                     "photo_path": row[3],
-                    "image_url": photo_path_to_url(row[3]),
+                    "image_url": ("/" + row[3].replace("\\", "/").lstrip("/")) if row[3] else None,
                     "face_registered": row[2] == "active",
                 }
                 for row in rows
@@ -596,46 +589,3 @@ def get_status_rules() -> dict[str, Any]:
 def json_bytes(payload: Any) -> bytes:
     return json.dumps(payload, ensure_ascii=False, indent=2).encode("utf-8")
 
-EXPORT_CSV_HEADERS = [
-    "Employee ID",
-    "Employee Name",
-    "Date",
-    "Entry Time",
-    "Exit Time",
-    "Current Status",
-    "Event Type",
-    "Notes",
-]
-
-
-def attendance_records_to_csv(records: list[dict[str, Any]]) -> bytes:
-    """Convert a list of attendance record dicts into CSV bytes (UTF-8 BOM)."""
-    buffer = io.StringIO()
-    writer = csv.writer(buffer, quoting=csv.QUOTE_MINIMAL)
-    writer.writerow(EXPORT_CSV_HEADERS)
-
-    for record in records:
-        notes = record.get("notes") or []
-        notes_text = "; ".join(notes) if isinstance(notes, list) else str(notes)
-        writer.writerow(
-            [
-                record.get("employee_id") if record.get("employee_id") is not None else "",
-                record.get("employee_name", ""),
-                record.get("date", ""),
-                record.get("entry_time") or "",
-                record.get("exit_time") or "",
-                record.get("current_status", ""),
-                record.get("event_type", ""),
-                notes_text,
-            ]
-        )
-
-    return "\ufeff".encode("utf-8") + buffer.getvalue().encode("utf-8")
-
-
-def build_export_filename(work_date: str | None = None) -> str:
-    """Build a sensible filename for the downloaded CSV."""
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    if work_date:
-        return f"attendance_{work_date}_{timestamp}.csv"
-    return f"attendance_export_{timestamp}.csv"

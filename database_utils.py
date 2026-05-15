@@ -236,11 +236,6 @@ def fetch_registered_users() -> list[sqlite3.Row]:
         return cursor.fetchall()
 
 
-def get_registered_user(cursor: sqlite3.Cursor, user_id: int) -> sqlite3.Row | None:
-    cursor.execute("SELECT id, name FROM users WHERE id = ?", (user_id,))
-    return cursor.fetchone()
-
-
 def get_employee(cursor: sqlite3.Cursor, user_id: int) -> sqlite3.Row | None:
     cursor.execute("SELECT id, full_name, photo_path FROM employees WHERE id = ?", (user_id,))
     return cursor.fetchone()
@@ -267,7 +262,8 @@ def resolve_managed_file_path(path_value: str | None) -> Path | None:
 def delete_employee_record(user_id: int) -> dict[str, Any]:
     with get_connection() as connection:
         cursor = connection.cursor()
-        user = get_registered_user(cursor, user_id)
+        cursor.execute("SELECT id, name FROM users WHERE id = ?", (user_id,))
+        user = cursor.fetchone()
         employee = get_employee(cursor, user_id)
 
         if user is None and employee is None:
@@ -356,10 +352,6 @@ def log_manual_event(user_id: int, event_type: str) -> dict[str, Any]:
         "event_type": event_type,
         "timestamp": now.isoformat(),
     }
-
-
-def deactivate_or_delete_user(user_id: int) -> bool:
-    return bool(delete_employee_record(user_id)["deleted"])
 
 
 def log_attendance_event(name: str, status: str, event_dt: datetime) -> int | None:

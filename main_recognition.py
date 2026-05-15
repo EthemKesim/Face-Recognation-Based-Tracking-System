@@ -1,27 +1,20 @@
 import cv2
 import face_recognition
 import json
-import numpy as np
-import os
 from datetime import datetime, time
 from liveness_utils import check_liveness, is_fake_texture
 from database_utils import init_db, insert_user, load_registered_faces, load_todays_attendance_state, log_attendance_event
 
-# -------------------------------
-# SETTINGS & CONSTANTS
-# -------------------------------
 KNOWN_ENCODINGS, KNOWN_NAMES = load_registered_faces()
 LIVENESS_STATUS = {}
 LAST_EVENT = {}  # {name: {"type": "CHECK-IN"|"CHECK-OUT", "time": datetime}}
 FRAME_COUNTER = 0
 LOG_FILE = "attendance_logs.txt"
 
-MIN_WORK_SECONDS = 2 * 60  # 2 min after CHECK-IN → next detection triggers CHECK-OUT
-CHECKIN_COOLDOWN = 5 * 60   # 5 min after CHECK-OUT → next detection triggers new CHECK-IN
+MIN_WORK_SECONDS = 2 * 60   # testing: 2 min; production: 30 * 60
+CHECKIN_COOLDOWN = 5 * 60   # re-entry cooldown after CHECK-OUT
 
-# -------------------------------
-# TIME RULES
-# -------------------------------
+
 def get_status_by_time(event_type, current_dt):
     current_t = current_dt.time()
     morning_warning   = time(9, 15)
@@ -58,26 +51,20 @@ def get_status_by_time(event_type, current_dt):
 # EVENT LOGIC
 # -------------------------------
 def should_log_event(name, current_time):
-    """Return 'CHECK-IN', 'CHECK-OUT', or None based on last event."""
     last = LAST_EVENT.get(name)
     if last is None:
         return "CHECK-IN"
     elapsed = (current_time - last["time"]).total_seconds()
     if last["type"] == "CHECK-IN":
         return "CHECK-OUT" if elapsed >= MIN_WORK_SECONDS else None
-    # last was CHECK-OUT
     return "CHECK-IN" if elapsed >= CHECKIN_COOLDOWN else None
 
-# -------------------------------
-# TXT LOGGING
-# -------------------------------
+
 def log_to_txt(name, status, dt):
     with open(LOG_FILE, "a", encoding="utf-8") as f:
         f.write(f"{dt.strftime('%d/%m/%Y %H:%M:%S')} - {name} - {status}\n")
 
-# -------------------------------
-# UI HELPERS
-# -------------------------------
+
 def get_color(display_name):
     if "SPOOFING!" in display_name or "Unknown" in display_name:
         return (0, 0, 255)
@@ -85,9 +72,7 @@ def get_color(display_name):
         return (0, 255, 255)
     return (0, 255, 0)
 
-# -------------------------------
-# MAIN LOOP
-# -------------------------------
+
 def run_recognition():
     global KNOWN_ENCODINGS, KNOWN_NAMES, FRAME_COUNTER
 
