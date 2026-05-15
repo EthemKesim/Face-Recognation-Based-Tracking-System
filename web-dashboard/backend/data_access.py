@@ -46,6 +46,13 @@ class AttendanceRecord:
         }
 
 
+def photo_path_to_url(photo_path: str | None) -> str | None:
+    if not photo_path:
+        return None
+    normalized = photo_path.replace("\\", "/").lstrip("/")
+    return "/" + normalized
+
+
 def load_registered_users() -> list[dict[str, Any]]:
     if not DB_PATH.exists():
         return []
@@ -67,6 +74,7 @@ def load_registered_users() -> list[dict[str, Any]]:
                     "name": row[1],
                     "status": row[2],
                     "photo_path": row[3],
+                    "image_url": photo_path_to_url(row[3]),
                     "face_registered": row[2] == "active",
                 }
                 for row in rows
@@ -75,7 +83,7 @@ def load_registered_users() -> list[dict[str, Any]]:
         cursor.execute("SELECT id, name FROM users ORDER BY name COLLATE NOCASE, id")
         rows = cursor.fetchall()
 
-    return [{"id": row[0], "name": row[1], "status": "active", "photo_path": None, "face_registered": True} for row in rows]
+    return [{"id": row[0], "name": row[1], "status": "active", "photo_path": None, "image_url": None, "face_registered": True} for row in rows]
 
 
 def table_exists(cursor: sqlite3.Cursor, table_name: str) -> bool:
@@ -278,6 +286,7 @@ def serialize_event(event: dict[str, Any]) -> dict[str, Any]:
         "date": event["date"],
         "time": event["time"],
         "employee_name": event["employee_name"],
+        "employee_image_url": event.get("employee_image_url"),
         "status": event["status"],
         "event_type": event["event_type"],
         "status_group": event["status_group"],
@@ -340,6 +349,8 @@ def derive_structured_current_status(
     if exit_time:
         return "Checked Out"
     if entry_time:
+        if attendance_status == "late":
+            return "Late Check-In"
         return "Still Inside"
     return "No activity"
 
@@ -388,17 +399,28 @@ def build_structured_event_list(
 
 def get_dashboard_data() -> dict[str, Any]:
     users = load_registered_users()
+    user_image_map: dict[str, str | None] = {u["name"]: u.get("image_url") for u in users}
+
     events = parse_log_events()
+    for event in events:
+        name = event.get("employee_name")
+        event["employee_image_url"] = user_image_map.get(name) if name else None
+
     records = load_structured_attendance_records() or build_attendance_records(events, users)
     today = date.today().strftime(API_DATE_FORMAT)
     todays_records = [record for record in records if record.work_date == today]
     latest_detection = serialize_event(events[0]) if events else None
 
+    def enrich_record(record: AttendanceRecord) -> dict[str, Any]:
+        d = record.to_dict()
+        d["employee_image_url"] = user_image_map.get(record.employee_name)
+        return d
+
     return {
         "users": users,
         "events": [serialize_event(event) for event in events],
-        "records": [record.to_dict() for record in records],
-        "today_records": [record.to_dict() for record in todays_records],
+        "records": [enrich_record(r) for r in records],
+        "today_records": [enrich_record(r) for r in todays_records],
         "latest_detection": latest_detection,
         "summary": build_summary(users, todays_records, events),
     }
@@ -422,12 +444,21 @@ def build_summary(
         if any("OVERTIME" in event["status"] for event in record.events)
     ]
 
+    present_names = {record.employee_name for record in present_today}
+    absent_employees = [
+        {"id": u["id"], "name": u["name"], "image_url": u.get("image_url")}
+        for u in users
+        if u["name"] not in present_names
+    ]
+
     return {
         "total_registered_employees": len(users),
         "present_today": len(present_today),
         "late_today": len(late_today),
         "checked_out_today": len(checked_out_today),
         "overtime_employees": len(overtime_today),
+        "absent_today": len(absent_employees),
+        "absent_employees": absent_employees,
         "recent_detections": [serialize_event(event) for event in events[:8]],
     }
 
@@ -507,6 +538,7 @@ def build_employee_rows(data: dict[str, Any]) -> list[dict[str, Any]]:
             {
                 "id": user["id"],
                 "name": user["name"],
+                "image_url": user.get("image_url"),
                 "face_registered": user["face_registered"],
                 "last_seen": latest_event["timestamp"] if latest_event else None,
                 "current_status": today_record["current_status"] if today_record else "Absent / No activity today",
@@ -534,6 +566,7 @@ def get_employee_detail(employee_id: int, data: dict[str, Any]) -> dict[str, Any
     return {
         "id": employee["id"],
         "name": employee["name"],
+        "image_url": employee.get("image_url"),
         "face_registered": employee["face_registered"],
         "latest_attendance_state": employee_records[0]["current_status"] if employee_records else "No attendance records",
         "latest_event": latest_event,
@@ -557,16 +590,6 @@ def get_status_rules() -> dict[str, Any]:
             {"name": "Overtime Threshold", "time": "18:00", "description": "CHECK-OUT after 18:00 is labeled CHECK-OUT (After 18:00)."},
             {"name": "Work Duration Overtime", "time": "9 hours worked", "description": "If time between check-in and check-out exceeds 9 hours, the system writes OVERTIME: <hours>."},
         ],
-    }
-
-
-def json_bytes(payload: Any) -> bytes:
-    return json.dumps(payload, ensure_ascii=False, indent=2).encode("utf-8")
-
-...
-def get_status_rules() -> dict[str, Any]:
-    return {
-        ...
     }
 
 

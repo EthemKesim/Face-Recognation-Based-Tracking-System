@@ -40,7 +40,14 @@ except ImportError:
 if str(PROJECT_SOURCE_DIR) not in sys.path:
     sys.path.insert(0, str(PROJECT_SOURCE_DIR))
 
-from database_utils import delete_employee_record
+from database_utils import (
+    delete_employee_record,
+    employee_name_exists,
+    insert_user,
+    load_registered_faces,
+    log_manual_event,
+    update_employee_photo,
+)
 
 
 HOST = "127.0.0.1"
@@ -158,6 +165,16 @@ def extract_employee_id(path: str) -> int | None:
     return None
 
 
+def extract_employee_event(path: str) -> tuple[int, str] | None:
+    parts = [part for part in path.strip("/").split("/") if part]
+    if len(parts) == 4 and parts[0] == "api" and parts[1] == "employees" and parts[2].isdigit():
+        if parts[3] == "checkin":
+            return int(parts[2]), "CHECK-IN"
+        if parts[3] == "checkout":
+            return int(parts[2]), "CHECK-OUT"
+    return None
+
+
 class DashboardHandler(BaseHTTPRequestHandler):
     server_version = "FaceAttendanceDashboard/1.1"
 
@@ -175,6 +192,12 @@ class DashboardHandler(BaseHTTPRequestHandler):
 
         if parsed.path.lstrip("/") in PUBLIC_FRONTEND_FILES:
             self.serve_frontend(parsed.path)
+            return
+
+        if parsed.path.startswith("/employee_images/"):
+            if not self.require_auth(is_api=False):
+                return
+            self.serve_employee_image(parsed.path)
             return
 
         if parsed.path.startswith("/api/"):
@@ -205,6 +228,15 @@ class DashboardHandler(BaseHTTPRequestHandler):
             return
 
         if parsed.path.startswith("/api/") and not self.require_auth(is_api=True):
+            return
+
+        if parsed.path == "/api/employees/register":
+            self.handle_employee_register()
+            return
+
+        employee_event = extract_employee_event(parsed.path)
+        if employee_event is not None:
+            self.handle_manual_event(*employee_event)
             return
 
         self.send_json({"error": "Endpoint not found."}, status=HTTPStatus.NOT_FOUND)
@@ -347,6 +379,109 @@ class DashboardHandler(BaseHTTPRequestHandler):
 
         self.send_json({"authenticated": True, "username": session["username"]})
 
+    def handle_employee_register(self) -> None:
+        try:
+            import cv2
+            import face_recognition
+            import numpy as np
+        except ImportError as exc:
+            self.send_json(
+                {"error": f"Face recognition library not available: {exc}"},
+                status=HTTPStatus.INTERNAL_SERVER_ERROR,
+            )
+            return
+
+        payload = self.read_json_body()
+        name = str(payload.get("name", "")).strip()
+        image_data_url = str(payload.get("image", ""))
+
+        if not name:
+            self.send_json({"error": "Employee name is required."}, status=HTTPStatus.BAD_REQUEST)
+            return
+
+        # Check 1: name uniqueness (case-insensitive)
+        existing_name = employee_name_exists(name)
+        if existing_name:
+            self.send_json(
+                {"error": f"An employee named '{existing_name}' is already registered."},
+                status=HTTPStatus.CONFLICT,
+            )
+            return
+
+        if not image_data_url or "," not in image_data_url:
+            self.send_json({"error": "Image data is required."}, status=HTTPStatus.BAD_REQUEST)
+            return
+
+        try:
+            image_bytes = base64.b64decode(image_data_url.split(",", 1)[1])
+            image_array = np.frombuffer(image_bytes, dtype=np.uint8)
+            frame = cv2.imdecode(image_array, cv2.IMREAD_COLOR)
+            if frame is None:
+                raise ValueError("Could not decode image data.")
+            rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        except Exception as exc:
+            self.send_json({"error": f"Image decoding failed: {exc}"}, status=HTTPStatus.BAD_REQUEST)
+            return
+
+        face_locations = face_recognition.face_locations(rgb_frame)
+        face_encodings = face_recognition.face_encodings(rgb_frame, face_locations)
+
+        if not face_encodings:
+            self.send_json(
+                {"error": "No face detected in the captured photo. Please retake."},
+                status=HTTPStatus.UNPROCESSABLE_ENTITY,
+            )
+            return
+
+        # Check 2: face encoding similarity against all registered faces
+        known_encodings, known_names = load_registered_faces()
+        import sys
+        print(f"[FACE-CHECK] {len(known_encodings)} encoding(s) loaded from DB", file=sys.stderr)
+        if known_encodings:
+            distances = face_recognition.face_distance(known_encodings, face_encodings[0])
+            best_idx = int(distances.argmin())
+            best_distance = float(distances[best_idx])
+            print(f"[FACE-CHECK] Best match: '{known_names[best_idx]}' distance={best_distance:.4f}", file=sys.stderr)
+            if best_distance < 0.6:
+                matched_name = known_names[best_idx]
+                similarity = round((1 - best_distance) * 100)
+                self.send_json(
+                    {"error": f"Bu yüz zaten '{matched_name}' olarak kayıtlı (benzerlik: %{similarity})."},
+                    status=HTTPStatus.CONFLICT,
+                )
+                return
+
+        encoding_json = json.dumps(face_encodings[0].tolist())
+        user_id = insert_user(name, encoding_json)
+
+        images_dir = PROJECT_SOURCE_DIR / "employee_images"
+        images_dir.mkdir(exist_ok=True)
+
+        top, right, bottom, left = face_locations[0]
+        h, w = frame.shape[:2]
+        pad = 60
+        face_img = frame[max(0, top - pad):min(h, bottom + pad), max(0, left - pad):min(w, right + pad)]
+
+        image_filename = f"user_{user_id}.jpg"
+        cv2.imwrite(str(images_dir / image_filename), face_img)
+
+        relative_path = f"employee_images/{image_filename}"
+        update_employee_photo(user_id, relative_path)
+
+        self.send_json({
+            "success": True,
+            "user_id": user_id,
+            "name": name,
+            "image_url": f"/employee_images/{image_filename}",
+        })
+
+    def handle_manual_event(self, employee_id: int, event_type: str) -> None:
+        result = log_manual_event(employee_id, event_type)
+        if not result["success"]:
+            self.send_json({"error": result["error"]}, status=HTTPStatus.NOT_FOUND)
+            return
+        self.send_json(result)
+
     def handle_employee_delete(self, employee_id: int) -> None:
         result = delete_employee_record(employee_id)
         if not result["deleted"]:
@@ -431,6 +566,28 @@ class DashboardHandler(BaseHTTPRequestHandler):
         self.send_response(HTTPStatus.OK)
         self.send_header("Content-Type", content_type or "text/html; charset=utf-8")
         self.send_header("Cache-Control", "no-store")
+        self.end_headers()
+        self.wfile.write(candidate.read_bytes())
+
+    def serve_employee_image(self, raw_path: str) -> None:
+        relative_path = raw_path.lstrip("/")
+        candidate = (PROJECT_SOURCE_DIR / relative_path).resolve()
+        employee_images_dir = (PROJECT_SOURCE_DIR / "employee_images").resolve()
+
+        try:
+            candidate.relative_to(employee_images_dir)
+        except ValueError:
+            self.send_error(HTTPStatus.NOT_FOUND)
+            return
+
+        if not candidate.exists() or candidate.is_dir():
+            self.send_error(HTTPStatus.NOT_FOUND)
+            return
+
+        content_type, _ = mimetypes.guess_type(candidate.name)
+        self.send_response(HTTPStatus.OK)
+        self.send_header("Content-Type", content_type or "image/jpeg")
+        self.send_header("Cache-Control", "max-age=3600")
         self.end_headers()
         self.wfile.write(candidate.read_bytes())
 

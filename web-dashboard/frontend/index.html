@@ -24,6 +24,7 @@
         <button class="nav-link" data-view="employees"><span class="nav-icon">E</span><span>Registered Employees</span></button>
         <button class="nav-link" data-view="logs"><span class="nav-icon">L</span><span>Activity Logs</span></button>
         <button class="nav-link" data-view="rules"><span class="nav-icon">R</span><span>Status Rules</span></button>
+        <button class="nav-link" data-view="register"><span class="nav-icon">+</span><span>Register Employee</span></button>
       </nav>
 
       <div class="sidebar-footer">
@@ -99,6 +100,7 @@
                   <th>Date</th>
                   <th>Entry Time</th>
                   <th>Exit Time</th>
+                  <th>Duration</th>
                   <th>Current Status</th>
                   <th>Event Type</th>
                   <th>Notes</th>
@@ -107,6 +109,16 @@
               <tbody id="today-attendance-body"></tbody>
             </table>
           </div>
+        </section>
+
+        <section class="panel">
+          <div class="panel-header">
+            <div>
+              <p class="eyebrow">Not checked in today</p>
+              <h3>Absent Employees</h3>
+            </div>
+          </div>
+          <div id="absent-list"></div>
         </section>
       </section>
 
@@ -140,6 +152,7 @@
                   <th>Date</th>
                   <th>Entry Time</th>
                   <th>Exit Time</th>
+                  <th>Duration</th>
                   <th>Current Status</th>
                   <th>Event Type</th>
                   <th>Notes</th>
@@ -227,12 +240,75 @@
     </main>
   </div>
 
+      <section class="view" data-view-panel="register">
+        <section class="panel">
+          <div class="panel-header">
+            <div>
+              <p class="eyebrow">Camera Registration</p>
+              <h3>Register New Employee</h3>
+            </div>
+          </div>
+          <div class="register-layout">
+
+            <div class="camera-panel">
+              <div class="source-tabs">
+                <button class="source-tab active" data-source="camera" type="button">Live Camera</button>
+                <button class="source-tab" data-source="upload" type="button">Upload Photo</button>
+              </div>
+
+              <div id="camera-source">
+                <div id="camera-placeholder" class="camera-placeholder">
+                  <p>Camera preview will appear here</p>
+                  <p class="muted">Click <strong>Start Camera</strong> to begin</p>
+                </div>
+                <video id="register-video" class="camera-preview" autoplay playsinline muted style="display:none"></video>
+                <img id="captured-preview" class="camera-preview" style="display:none" alt="Captured frame">
+                <canvas id="register-canvas" style="display:none"></canvas>
+                <div class="camera-controls">
+                  <button id="start-camera-btn" class="primary-button" type="button">Start Camera</button>
+                  <button id="capture-btn" class="secondary-button" type="button" disabled>Capture Photo</button>
+                  <button id="retake-btn" class="secondary-button" type="button" style="display:none">Retake</button>
+                </div>
+              </div>
+
+              <div id="upload-source" style="display:none">
+                <div class="upload-area" id="upload-area">
+                  <div class="upload-area-content">
+                    <p>Click to select a photo</p>
+                    <p class="muted">or drag and drop here</p>
+                    <p class="muted">JPG · PNG · WEBP · max 10 MB</p>
+                  </div>
+                  <input type="file" id="photo-upload" accept="image/jpeg,image/png,image/webp">
+                </div>
+                <img id="upload-preview" class="camera-preview" style="display:none" alt="Uploaded photo preview">
+                <div class="camera-controls">
+                  <button id="clear-upload-btn" class="secondary-button" type="button" style="display:none">Clear Photo</button>
+                </div>
+              </div>
+            </div>
+
+            <div class="register-form-panel">
+              <div class="field-group">
+                <label class="input-label" for="register-name">Employee Full Name</label>
+                <input type="text" id="register-name" placeholder="e.g. Ethem Kesim" autocomplete="off">
+              </div>
+              <button id="register-submit-btn" class="primary-button" type="button" disabled>Register Employee</button>
+              <div id="register-feedback" class="feedback-banner"></div>
+            </div>
+
+          </div>
+        </section>
+      </section>
+
   <dialog id="employee-modal" class="modal">
     <div class="modal-card">
       <div class="modal-header">
-        <div>
-          <p class="eyebrow">Employee Details</p>
-          <h3 id="modal-title">Employee</h3>
+        <div class="modal-identity">
+          <div id="modal-avatar"></div>
+          <div>
+            <p class="eyebrow">Employee Details</p>
+            <h3 id="modal-title">Employee</h3>
+          </div>
         </div>
         <button id="modal-close" class="icon-button" aria-label="Close">&times;</button>
       </div>

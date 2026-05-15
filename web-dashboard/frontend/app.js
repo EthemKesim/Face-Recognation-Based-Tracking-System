@@ -22,6 +22,7 @@ const VIEW_META = {
   employees: "Inspect registered identities, current attendance state, and available employee actions.",
   logs: "Review the latest parsed recognition events with focused search and event filters.",
   rules: "Reference the attendance timing rules currently mirrored from the local Python system.",
+  register: "Register a new employee by capturing their face from your local camera.",
 };
 
 const refreshLabel = document.getElementById("last-refresh");
@@ -42,6 +43,8 @@ const attendanceFiltersForm = document.getElementById("attendance-filters");
 const employeeFiltersForm = document.getElementById("employee-filters");
 const logFiltersForm = document.getElementById("log-filters");
 let confirmResolver = null;
+let cameraStream = null;
+let capturedImageDataUrl = null;
 
 document.querySelectorAll(".nav-link").forEach((button) => {
   button.addEventListener("click", () => setView(button.dataset.view));
@@ -134,6 +137,7 @@ async function refreshAll() {
   await Promise.all([loadAttendanceRecords(), loadEmployees(), loadLogs()]);
 
   renderSummary();
+  renderAbsentToday();
   renderLatestDetection();
   renderRecentDetections();
   renderTodayAttendance();
@@ -201,6 +205,9 @@ function renderSession() {
 }
 
 function setView(viewName) {
+  if (state.activeView === "register" && viewName !== "register") {
+    stopCameraStream();
+  }
   state.activeView = viewName;
 
   document.querySelectorAll(".nav-link").forEach((button) => {
@@ -224,6 +231,7 @@ function renderSummary() {
   const cards = [
     ["Total Registered Employees", state.summary.total_registered_employees],
     ["Present Today", state.summary.present_today],
+    ["Absent Today", state.summary.absent_today ?? 0],
     ["Late Today", state.summary.late_today],
     ["Checked Out Today", state.summary.checked_out_today],
     ["Overtime Employees", state.summary.overtime_employees],
@@ -310,19 +318,25 @@ function renderAttendanceRows(tbody, records, emptyMessage) {
     <tr>
       <td class="cell-compact">${record.employee_id ?? "&mdash;"}</td>
       <td class="record-name-cell">
-        <span class="record-name">${escapeHtml(record.employee_name)}</span>
-        <span class="subtle">${escapeHtml(record.event_type)}</span>
+        <div class="name-with-avatar">
+          ${avatarHtml(record.employee_image_url, record.employee_name)}
+          <div>
+            <span class="record-name">${escapeHtml(record.employee_name)}</span>
+            <span class="subtle">${escapeHtml(record.event_type)}</span>
+          </div>
+        </div>
       </td>
       <td class="cell-compact">${escapeHtml(record.date)}</td>
       <td class="cell-compact">${record.entry_time ?? "&mdash;"}</td>
       <td class="cell-compact">${record.exit_time ?? "&mdash;"}</td>
+      <td class="cell-compact">${formatDuration(record.entry_time, record.exit_time)}</td>
       <td>${badge(record.current_status, statusGroupFromText(record.current_status))}</td>
       <td class="cell-compact">${escapeHtml(record.event_type)}</td>
       <td>${record.notes.length ? record.notes.map(escapeHtml).join(", ") : "&mdash;"}</td>
     </tr>
   `).join("") : `
     <tr>
-      <td colspan="8"><div class="empty-state">${escapeHtml(emptyMessage)}</div></td>
+      <td colspan="9"><div class="empty-state">${escapeHtml(emptyMessage)}</div></td>
     </tr>
   `;
 }
@@ -335,8 +349,13 @@ function renderEmployees() {
       <tr>
         <td class="cell-compact">${employee.id}</td>
         <td class="record-name-cell">
-          <span class="employee-name">${escapeHtml(employee.name)}</span>
-          <span class="subtle">Registered identity profile</span>
+          <div class="name-with-avatar">
+            ${avatarHtml(employee.image_url, employee.name)}
+            <div>
+              <span class="employee-name">${escapeHtml(employee.name)}</span>
+              <span class="subtle">Registered identity profile</span>
+            </div>
+          </div>
         </td>
         <td class="cell-compact">${employee.face_registered ? "Yes" : "No"}</td>
         <td class="record-meta">${employee.last_seen ? formatDateTime(employee.last_seen) : "Never logged"}</td>
@@ -378,9 +397,14 @@ async function openEmployeeModal(employeeId) {
   const employee = response.employee;
   modal.dataset.employeeId = String(employee.id);
   modalTitle.textContent = employee.name;
+  document.getElementById("modal-avatar").innerHTML = avatarHtml(employee.image_url, employee.name, 64);
 
   const history = employee.history || [];
   modalContent.innerHTML = `
+    <div class="manual-event-row">
+      <button class="secondary-button checkin-button" data-event-type="CHECK-IN">Check In</button>
+      <button class="secondary-button checkout-button" data-event-type="CHECK-OUT">Check Out</button>
+    </div>
     <div class="detail-grid detail-metrics-grid">
       <div class="detail-card">
         <div class="detail-label">Latest Attendance State</div>
@@ -439,6 +463,10 @@ async function openEmployeeModal(employeeId) {
     </section>
   `;
 
+  modalContent.querySelectorAll("[data-event-type]").forEach((button) => {
+    button.addEventListener("click", () => handleManualEvent(employee.id, button.dataset.eventType));
+  });
+
   modal.showModal();
 }
 
@@ -492,7 +520,10 @@ function renderLogs() {
     return `
       <article class="log-item${index === 0 ? " recent" : ""}">
         <div class="log-item-header">
-          <strong class="employee-name">${escapeHtml(log.employee_name ?? "Unknown line")}</strong>
+          <div class="name-with-avatar">
+            ${avatarHtml(log.employee_image_url, log.employee_name ?? "?")}
+            <strong class="employee-name">${escapeHtml(log.employee_name ?? "Unknown line")}</strong>
+          </div>
           ${badge(log.status, log.status_group)}
         </div>
         <p class="timestamp">${log.timestamp ? formatDateTime(log.timestamp) : "No timestamp"} &middot; ${escapeHtml(log.event_type)}</p>
@@ -595,6 +626,280 @@ function escapeHtml(value) {
     .replaceAll("\"", "&quot;")
     .replaceAll("<", "&lt;")
     .replaceAll(">", "&gt;");
+}
+
+function stopCameraStream() {
+  if (cameraStream) {
+    cameraStream.getTracks().forEach((track) => track.stop());
+    cameraStream = null;
+  }
+  const video = document.getElementById("register-video");
+  if (video) {
+    video.srcObject = null;
+    video.style.display = "none";
+  }
+  const placeholder = document.getElementById("camera-placeholder");
+  if (placeholder) placeholder.style.display = "";
+  const startBtn = document.getElementById("start-camera-btn");
+  if (startBtn) startBtn.style.display = "";
+  const capBtn = document.getElementById("capture-btn");
+  if (capBtn) capBtn.disabled = true;
+  const retakeBtn = document.getElementById("retake-btn");
+  if (retakeBtn) retakeBtn.style.display = "none";
+  const preview = document.getElementById("captured-preview");
+  if (preview) preview.style.display = "none";
+  capturedImageDataUrl = null;
+}
+
+function setRegisterFeedback(type, message) {
+  const el = document.getElementById("register-feedback");
+  if (!message) {
+    el.className = "feedback-banner";
+    el.textContent = "";
+    return;
+  }
+  el.className = `feedback-banner ${type} show`;
+  el.textContent = message;
+}
+
+(function initRegisterView() {
+  const startCameraBtn = document.getElementById("start-camera-btn");
+  const captureBtn = document.getElementById("capture-btn");
+  const retakeBtn = document.getElementById("retake-btn");
+  const registerVideo = document.getElementById("register-video");
+  const registerCanvas = document.getElementById("register-canvas");
+  const capturedPreview = document.getElementById("captured-preview");
+  const cameraPlaceholder = document.getElementById("camera-placeholder");
+  const cameraSource = document.getElementById("camera-source");
+  const uploadSource = document.getElementById("upload-source");
+  const uploadArea = document.getElementById("upload-area");
+  const uploadPreview = document.getElementById("upload-preview");
+  const clearUploadBtn = document.getElementById("clear-upload-btn");
+  const photoUpload = document.getElementById("photo-upload");
+  const registerName = document.getElementById("register-name");
+  const registerSubmitBtn = document.getElementById("register-submit-btn");
+
+  // Source tab switching
+  document.querySelectorAll(".source-tab").forEach((tab) => {
+    tab.addEventListener("click", () => {
+      const source = tab.dataset.source;
+      document.querySelectorAll(".source-tab").forEach((t) =>
+        t.classList.toggle("active", t.dataset.source === source)
+      );
+      setRegisterFeedback("", "");
+      capturedImageDataUrl = null;
+      registerSubmitBtn.disabled = true;
+
+      if (source === "camera") {
+        uploadSource.style.display = "none";
+        uploadPreview.style.display = "none";
+        uploadArea.style.display = "";
+        clearUploadBtn.style.display = "none";
+        photoUpload.value = "";
+        cameraSource.style.display = "";
+      } else {
+        if (cameraStream) {
+          cameraStream.getTracks().forEach((t) => t.stop());
+          cameraStream = null;
+          registerVideo.srcObject = null;
+          registerVideo.style.display = "none";
+          cameraPlaceholder.style.display = "";
+          startCameraBtn.style.display = "";
+          captureBtn.disabled = true;
+          retakeBtn.style.display = "none";
+          capturedPreview.style.display = "none";
+        }
+        cameraSource.style.display = "none";
+        uploadSource.style.display = "";
+      }
+    });
+  });
+
+  // File upload helpers
+  function applyUploadedFile(file) {
+    if (!file.type.startsWith("image/")) {
+      setRegisterFeedback("error", "Please select a valid image file (JPG, PNG, WEBP).");
+      return;
+    }
+    if (file.size > 10 * 1024 * 1024) {
+      setRegisterFeedback("error", "File is too large. Maximum size is 10 MB.");
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      capturedImageDataUrl = e.target.result;
+      uploadPreview.src = capturedImageDataUrl;
+      uploadPreview.style.display = "block";
+      uploadArea.style.display = "none";
+      clearUploadBtn.style.display = "";
+      registerSubmitBtn.disabled = !registerName.value.trim();
+    };
+    reader.readAsDataURL(file);
+  }
+
+  photoUpload.addEventListener("change", () => {
+    if (photoUpload.files[0]) applyUploadedFile(photoUpload.files[0]);
+  });
+
+  clearUploadBtn.addEventListener("click", () => {
+    capturedImageDataUrl = null;
+    photoUpload.value = "";
+    uploadPreview.style.display = "none";
+    uploadArea.style.display = "";
+    clearUploadBtn.style.display = "none";
+    registerSubmitBtn.disabled = true;
+    setRegisterFeedback("", "");
+  });
+
+  uploadArea.addEventListener("dragover", (e) => {
+    e.preventDefault();
+    uploadArea.classList.add("drag-over");
+  });
+
+  uploadArea.addEventListener("dragleave", (e) => {
+    if (!uploadArea.contains(e.relatedTarget)) uploadArea.classList.remove("drag-over");
+  });
+
+  uploadArea.addEventListener("drop", (e) => {
+    e.preventDefault();
+    uploadArea.classList.remove("drag-over");
+    const file = e.dataTransfer.files[0];
+    if (file) applyUploadedFile(file);
+  });
+
+  startCameraBtn.addEventListener("click", async () => {
+    setRegisterFeedback("", "");
+    try {
+      cameraStream = await navigator.mediaDevices.getUserMedia({ video: { width: 640, height: 480 } });
+      registerVideo.srcObject = cameraStream;
+      registerVideo.style.display = "block";
+      cameraPlaceholder.style.display = "none";
+      capturedPreview.style.display = "none";
+      startCameraBtn.style.display = "none";
+      captureBtn.disabled = false;
+      retakeBtn.style.display = "none";
+      capturedImageDataUrl = null;
+      registerSubmitBtn.disabled = true;
+    } catch (err) {
+      setRegisterFeedback("error", `Camera access denied: ${err.message}`);
+    }
+  });
+
+  captureBtn.addEventListener("click", () => {
+    registerCanvas.width = registerVideo.videoWidth;
+    registerCanvas.height = registerVideo.videoHeight;
+    registerCanvas.getContext("2d").drawImage(registerVideo, 0, 0);
+    capturedImageDataUrl = registerCanvas.toDataURL("image/jpeg", 0.92);
+    capturedPreview.src = capturedImageDataUrl;
+    capturedPreview.style.display = "block";
+    registerVideo.style.display = "none";
+    captureBtn.disabled = true;
+    retakeBtn.style.display = "";
+    registerSubmitBtn.disabled = !registerName.value.trim();
+  });
+
+  retakeBtn.addEventListener("click", () => {
+    capturedImageDataUrl = null;
+    capturedPreview.style.display = "none";
+    registerVideo.style.display = "block";
+    captureBtn.disabled = false;
+    retakeBtn.style.display = "none";
+    registerSubmitBtn.disabled = true;
+    setRegisterFeedback("", "");
+  });
+
+  registerName.addEventListener("input", () => {
+    registerSubmitBtn.disabled = !registerName.value.trim() || !capturedImageDataUrl;
+  });
+
+  registerSubmitBtn.addEventListener("click", async () => {
+    const name = registerName.value.trim();
+    if (!name || !capturedImageDataUrl) return;
+
+    registerSubmitBtn.disabled = true;
+    registerSubmitBtn.textContent = "Registering...";
+    setRegisterFeedback("", "");
+
+    try {
+      const response = await api("/api/employees/register", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name, image: capturedImageDataUrl }),
+      });
+
+      setRegisterFeedback("success", `${response.name} registered successfully (ID: ${response.user_id}).`);
+      registerName.value = "";
+      stopCameraStream();
+      await loadEmployees();
+    } catch (err) {
+      setRegisterFeedback("error", err.message);
+    } finally {
+      registerSubmitBtn.disabled = false;
+      registerSubmitBtn.textContent = "Register Employee";
+    }
+  });
+}());
+
+function formatDuration(entryTime, exitTime) {
+  if (!entryTime || !exitTime) return "&mdash;";
+  const toSeconds = (t) => {
+    const [h, m, s = 0] = t.split(":").map(Number);
+    return h * 3600 + m * 60 + s;
+  };
+  const diff = toSeconds(exitTime) - toSeconds(entryTime);
+  if (diff <= 0) return "&mdash;";
+  const hours = Math.floor(diff / 3600);
+  const minutes = Math.floor((diff % 3600) / 60);
+  return hours === 0 ? `${minutes}m` : `${hours}h ${minutes}m`;
+}
+
+function renderAbsentToday() {
+  const container = document.getElementById("absent-list");
+  if (!container) return;
+  const absent = state.summary?.absent_employees || [];
+  if (!absent.length) {
+    container.innerHTML = `<div class="empty-state">All registered employees have checked in today.</div>`;
+    return;
+  }
+  container.innerHTML = `<div class="absent-grid">${absent.map((emp) => `
+    <div class="absent-item">
+      ${avatarHtml(emp.image_url, emp.name, 32)}
+      <span class="absent-name">${escapeHtml(emp.name)}</span>
+    </div>
+  `).join("")}</div>`;
+}
+
+async function handleManualEvent(employeeId, eventType) {
+  const endpoint = eventType === "CHECK-IN" ? "checkin" : "checkout";
+  try {
+    const response = await api(`/api/employees/${employeeId}/${endpoint}`, { method: "POST" });
+    setFeedback("success", `${response.employee_name} manually ${eventType === "CHECK-IN" ? "checked in" : "checked out"} at ${new Date(response.timestamp).toLocaleTimeString()}.`);
+    if (modal.open) modal.close();
+    await refreshAll();
+  } catch (error) {
+    setFeedback("error", error.message);
+  }
+}
+
+function getInitials(name) {
+  if (!name) return "?";
+  const parts = name.trim().split(/\s+/);
+  if (parts.length === 1) return parts[0].substring(0, 2).toUpperCase();
+  return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
+}
+
+function avatarHtml(imageUrl, name, size = 40) {
+  const px = `${size}px`;
+  const sizeStyle = `width:${px};height:${px}`;
+  const fontSize = `${Math.round(size * 0.3)}px`;
+  const initials = escapeHtml(getInitials(name));
+  const safeName = escapeHtml(name || "");
+
+  if (imageUrl) {
+    const safeUrl = escapeHtml(imageUrl);
+    return `<div class="avatar-wrap"><img src="${safeUrl}" class="avatar" style="${sizeStyle}" alt="${safeName}" onerror="this.classList.add('avatar-error')"><span class="avatar avatar-fallback" style="${sizeStyle};font-size:${fontSize}">${initials}</span></div>`;
+  }
+  return `<span class="avatar avatar-fallback" style="${sizeStyle};font-size:${fontSize}">${initials}</span>`;
 }
 
 boot().catch((error) => {

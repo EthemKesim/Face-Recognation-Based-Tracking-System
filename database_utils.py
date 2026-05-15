@@ -151,6 +151,45 @@ def migrate_text_logs_to_attendance(cursor: sqlite3.Cursor) -> None:
         upsert_attendance_log(cursor, employee_id, status.strip(), event_dt)
 
 
+def load_todays_attendance_state() -> dict[str, dict]:
+    """Return {employee_name: {"type": "CHECK-IN"|"CHECK-OUT", "time": datetime}} for today's records."""
+    today = datetime.now().date().isoformat()
+    state: dict[str, dict] = {}
+
+    with get_connection() as connection:
+        cursor = connection.cursor()
+        cursor.execute(
+            """
+            SELECT e.full_name, a.entry_time, a.exit_time
+            FROM attendance_logs a
+            JOIN employees e ON e.id = a.employee_id
+            WHERE a.date = ?
+            """,
+            (today,),
+        )
+        rows = cursor.fetchall()
+
+    for row in rows:
+        name = row["full_name"]
+        entry = row["entry_time"]
+        exit_ = row["exit_time"]
+
+        if exit_:
+            try:
+                t = datetime.strptime(f"{today} {exit_}", "%Y-%m-%d %H:%M:%S")
+            except ValueError:
+                t = datetime.now()
+            state[name] = {"type": "CHECK-OUT", "time": t}
+        elif entry:
+            try:
+                t = datetime.strptime(f"{today} {entry}", "%Y-%m-%d %H:%M:%S")
+            except ValueError:
+                t = datetime.now()
+            state[name] = {"type": "CHECK-IN", "time": t}
+
+    return state
+
+
 def load_registered_faces() -> tuple[list[Any], list[str]]:
     import json
     import numpy as np
@@ -270,6 +309,52 @@ def delete_employee_record(user_id: int) -> dict[str, Any]:
         "deleted_employee_rows": deleted_employee_rows,
         "deleted_photo_path": deleted_photo_path,
         "warning": photo_warning,
+    }
+
+
+def update_employee_photo(user_id: int, photo_path: str) -> None:
+    with get_connection() as connection:
+        cursor = connection.cursor()
+        cursor.execute("UPDATE employees SET photo_path = ? WHERE id = ?", (photo_path, user_id))
+        connection.commit()
+
+
+def employee_name_exists(name: str) -> str | None:
+    """Return the stored name if a case-insensitive match already exists, else None."""
+    with get_connection() as connection:
+        cursor = connection.cursor()
+        cursor.execute(
+            "SELECT full_name FROM employees WHERE lower(full_name) = lower(?) LIMIT 1",
+            (name,),
+        )
+        row = cursor.fetchone()
+        return row["full_name"] if row else None
+
+
+def log_manual_event(user_id: int, event_type: str) -> dict[str, Any]:
+    if event_type not in ("CHECK-IN", "CHECK-OUT"):
+        return {"success": False, "error": "Invalid event type."}
+
+    with get_connection() as connection:
+        cursor = connection.cursor()
+        employee = get_employee(cursor, user_id)
+        if employee is None:
+            return {"success": False, "error": "Employee not found."}
+
+        now = datetime.now()
+        status = f"{event_type} (Manual)"
+        upsert_attendance_log(cursor, user_id, status, now)
+        connection.commit()
+
+    with open(LOG_PATH, "a", encoding="utf-8") as f:
+        f.write(f"{now.strftime(LOG_DATETIME_FORMAT)} - {employee['full_name']} - {status}\n")
+
+    return {
+        "success": True,
+        "employee_id": user_id,
+        "employee_name": employee["full_name"],
+        "event_type": event_type,
+        "timestamp": now.isoformat(),
     }
 
 
