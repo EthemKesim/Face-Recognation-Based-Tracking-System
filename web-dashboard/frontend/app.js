@@ -56,6 +56,52 @@ attendanceFiltersForm.addEventListener("submit", async (event) => {
   await loadAttendanceRecords();
 });
 
+const exportAttendanceButton = document.getElementById("export-attendance-button");
+if (exportAttendanceButton) {
+  exportAttendanceButton.addEventListener("click", async () => {
+    const formData = new FormData(attendanceFiltersForm);
+    const queryString = buildQueryString(formData);
+    const url = withQuery("/api/attendance/export", queryString);
+
+    exportAttendanceButton.disabled = true;
+    const originalLabel = exportAttendanceButton.textContent;
+    exportAttendanceButton.textContent = "Exporting...";
+
+    try {
+      const response = await fetch(url, { cache: "no-store" });
+
+      if (response.status === 401) {
+        window.location.href = "/login";
+        return;
+      }
+
+      if (!response.ok) {
+        throw new Error(`Export failed: ${response.status}`);
+      }
+
+      const blob = await response.blob();
+      const downloadUrl = URL.createObjectURL(blob);
+      const filename = extractFilename(response.headers.get("Content-Disposition")) || "attendance_export.csv";
+
+      const tempAnchor = document.createElement("a");
+      tempAnchor.href = downloadUrl;
+      tempAnchor.download = filename;
+      document.body.appendChild(tempAnchor);
+      tempAnchor.click();
+      document.body.removeChild(tempAnchor);
+      URL.revokeObjectURL(downloadUrl);
+
+      setFeedback("success", `Attendance records exported as ${filename}.`);
+    } catch (error) {
+      setFeedback("error", error.message || "Could not export attendance records.");
+      console.error(error);
+    } finally {
+      exportAttendanceButton.disabled = false;
+      exportAttendanceButton.textContent = originalLabel;
+    }
+  });
+}
+
 employeeFiltersForm.addEventListener("submit", async (event) => {
   event.preventDefault();
   state.filters.employees = buildQueryString(new FormData(event.currentTarget));
@@ -618,6 +664,13 @@ function buildQueryString(formData) {
 
 function withQuery(path, queryString) {
   return queryString ? `${path}?${queryString}` : path;
+}
+function extractFilename(contentDisposition) {
+  if (!contentDisposition) {
+    return null;
+  }
+  const match = /filename="?([^"]+)"?/i.exec(contentDisposition);
+  return match ? match[1] : null;
 }
 
 function escapeHtml(value) {
