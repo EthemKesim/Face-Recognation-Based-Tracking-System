@@ -15,7 +15,7 @@ from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
 try:
-from .data_access import (
+        from .data_access import (
         PROJECT_SOURCE_DIR,
         attendance_records_to_csv,
         build_employee_rows,
@@ -28,7 +28,7 @@ from .data_access import (
         json_bytes,
     )
 except ImportError:
-from data_access import (
+        from data_access import (
         PROJECT_SOURCE_DIR,
         attendance_records_to_csv,
         build_employee_rows,
