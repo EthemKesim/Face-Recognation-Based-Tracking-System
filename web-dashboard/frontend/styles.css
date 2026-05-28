@@ -5493,3 +5493,12 @@ tbody tr:hover {
   padding: 11px 12px;
   border-radius: 10px;
 }
+
+/* Dashboard workspace background */
+.content {
+  min-height: 100vh;
+  background:
+    linear-gradient(135deg, rgba(8, 15, 28, 0.84), rgba(18, 28, 47, 0.78)),
+    url("/assets/background-Photoroom.png") center / cover fixed no-repeat,
+    #121a2b;
+}
