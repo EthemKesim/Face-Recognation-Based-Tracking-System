@@ -15,9 +15,11 @@ from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
 try:
-    from .data_access import (
+        from .data_access import (
         PROJECT_SOURCE_DIR,
+        attendance_records_to_csv,
         build_employee_rows,
+        build_export_filename,
         filter_events,
         filter_records,
         get_dashboard_data,
@@ -26,9 +28,11 @@ try:
         json_bytes,
     )
 except ImportError:
-    from data_access import (
+        from data_access import (
         PROJECT_SOURCE_DIR,
+        attendance_records_to_csv,
         build_employee_rows,
+        build_export_filename,
         filter_events,
         filter_records,
         get_dashboard_data,
@@ -342,6 +346,21 @@ class DashboardHandler(BaseHTTPRequestHandler):
             status_filter = first_query_value(query, "status")
             records = filter_records(data["records"], name_query=name_query, work_date=work_date, status_filter=status_filter)
             self.send_json({"records": records})
+            return
+
+        if path == "/api/attendance/export":
+            name_query = first_query_value(query, "search")
+            work_date = first_query_value(query, "date")
+            status_filter = first_query_value(query, "status")
+            records = filter_records(
+                data["records"],
+                name_query=name_query,
+                work_date=work_date,
+                status_filter=status_filter,
+            )
+            csv_bytes = attendance_records_to_csv(records)
+            filename = build_export_filename(work_date)
+            self.send_csv(csv_bytes, filename)
             return
 
         if path == "/api/logs":
@@ -722,6 +741,20 @@ class DashboardHandler(BaseHTTPRequestHandler):
         self.send_header("Content-Length", str(len(body)))
         for header_name, header_value in (headers or {}).items():
             self.send_header(header_name, header_value)
+        self.end_headers()
+        self.wfile.write(body)
+
+    def send_csv(
+        self,
+        body: bytes,
+        filename: str,
+        status: HTTPStatus = HTTPStatus.OK,
+    ) -> None:
+        self.send_response(status)
+        self.send_header("Content-Type", "text/csv; charset=utf-8")
+        self.send_header("Content-Disposition", f'attachment; filename="{filename}"')
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)
 
