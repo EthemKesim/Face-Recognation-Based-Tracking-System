@@ -3,14 +3,20 @@ from __future__ import annotations
 import json
 import re
 import sqlite3
+import sys
 from collections import defaultdict
 from dataclasses import dataclass
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
 
 PROJECT_SOURCE_DIR = Path(__file__).resolve().parents[2]
+if str(PROJECT_SOURCE_DIR) not in sys.path:
+    sys.path.insert(0, str(PROJECT_SOURCE_DIR))
+
+from time_override import get_current_datetime
+
 DB_PATH = PROJECT_SOURCE_DIR / "face_records.db"
 LOG_PATH = PROJECT_SOURCE_DIR / "attendance_logs.txt"
 MAIN_SCRIPT_PATH = PROJECT_SOURCE_DIR / "main_recognition.py"
@@ -56,6 +62,7 @@ def load_registered_users() -> list[dict[str, Any]]:
             cursor.execute(
                 """
                 SELECT id, full_name, status, photo_path
+                , department_role
                 FROM employees
                 ORDER BY full_name COLLATE NOCASE, id
                 """
@@ -67,6 +74,7 @@ def load_registered_users() -> list[dict[str, Any]]:
                     "name": row[1],
                     "status": row[2],
                     "photo_path": row[3],
+                    "department_role": row[4],
                     "image_url": ("/" + row[3].replace("\\", "/").lstrip("/")) if row[3] else None,
                     "face_registered": row[2] == "active",
                 }
@@ -76,7 +84,7 @@ def load_registered_users() -> list[dict[str, Any]]:
         cursor.execute("SELECT id, name FROM users ORDER BY name COLLATE NOCASE, id")
         rows = cursor.fetchall()
 
-    return [{"id": row[0], "name": row[1], "status": "active", "photo_path": None, "image_url": None, "face_registered": True} for row in rows]
+    return [{"id": row[0], "name": row[1], "status": "active", "photo_path": None, "department_role": None, "image_url": None, "face_registered": True} for row in rows]
 
 
 def table_exists(cursor: sqlite3.Cursor, table_name: str) -> bool:
@@ -200,7 +208,11 @@ def determine_event_type(status: str) -> str:
 
 def determine_status_group(status: str) -> str:
     normalized = status.upper()
-    if "VIOLATION" in normalized or "WARNING" in normalized or "LATE" in normalized:
+    if "VIOLATION" in normalized:
+        return "violation"
+    if "WARNING" in normalized:
+        return "warning"
+    if "LATE" in normalized:
         return "late"
     if "LUNCH BREAK" in normalized:
         return "lunch"
@@ -382,7 +394,7 @@ def build_structured_event_list(
                 "employee_name": employee_name,
                 "status": entry_status,
                 "event_type": "CHECK-IN",
-                "status_group": "late" if attendance_status == "late" else "checkin",
+                "status_group": "warning" if attendance_status == "late" else "checkin",
                 "notes": build_structured_attendance_notes(attendance_status, entry_time, exit_time),
                 "raw": "Structured database record",
             }
@@ -400,7 +412,7 @@ def get_dashboard_data() -> dict[str, Any]:
         event["employee_image_url"] = user_image_map.get(name) if name else None
 
     records = load_structured_attendance_records() or build_attendance_records(events, users)
-    today = date.today().strftime(API_DATE_FORMAT)
+    today = get_current_datetime().date().strftime(API_DATE_FORMAT)
     todays_records = [record for record in records if record.work_date == today]
     latest_detection = serialize_event(events[0]) if events else None
 
@@ -452,8 +464,76 @@ def build_summary(
         "overtime_employees": len(overtime_today),
         "absent_today": len(absent_employees),
         "absent_employees": absent_employees,
+        "admin_alerts": build_admin_alerts(events),
         "recent_detections": [serialize_event(event) for event in events[:8]],
     }
+
+
+def build_admin_alerts(
+    events: list[dict[str, Any]],
+    late_threshold: int = 3,
+    window_days: int = 7,
+) -> list[dict[str, Any]]:
+    today = get_current_datetime().date()
+    window_start = today - timedelta(days=window_days - 1)
+    late_by_employee: dict[str, dict[str, Any]] = {}
+
+    for event in events:
+        employee_name = event.get("employee_name")
+        event_date = event.get("date")
+        if not employee_name or not event_date:
+            continue
+        if event.get("status_group") not in {"late", "warning", "violation"}:
+            continue
+
+        try:
+            parsed_date = datetime.strptime(event_date, API_DATE_FORMAT).date()
+        except ValueError:
+            continue
+
+        if parsed_date < window_start or parsed_date > today:
+            continue
+
+        alert = late_by_employee.setdefault(
+            employee_name,
+            {
+                "employee_name": employee_name,
+                "employee_image_url": event.get("employee_image_url"),
+                "late_dates": set(),
+                "latest_timestamp": event.get("timestamp"),
+                "latest_status": event.get("status"),
+            },
+        )
+        alert["late_dates"].add(event_date)
+        if event.get("_dt") and event.get("timestamp"):
+            latest_dt = datetime.fromisoformat(alert["latest_timestamp"]) if alert.get("latest_timestamp") else datetime.min
+            if event["_dt"] > latest_dt:
+                alert["latest_timestamp"] = event.get("timestamp")
+                alert["latest_status"] = event.get("status")
+
+    alerts = []
+    for alert in late_by_employee.values():
+        late_dates = sorted(alert["late_dates"], reverse=True)
+        if len(late_dates) < late_threshold:
+            continue
+        alerts.append(
+            {
+                "type": "repeated_late",
+                "severity": "warning",
+                "employee_name": alert["employee_name"],
+                "employee_image_url": alert.get("employee_image_url"),
+                "count": len(late_dates),
+                "threshold": late_threshold,
+                "window_days": window_days,
+                "late_dates": late_dates,
+                "latest_timestamp": alert.get("latest_timestamp"),
+                "latest_status": alert.get("latest_status"),
+                "message": f"{alert['employee_name']} was late {len(late_dates)} times in the last {window_days} days.",
+            }
+        )
+
+    alerts.sort(key=lambda item: (item["count"], item.get("latest_timestamp") or ""), reverse=True)
+    return alerts[:6]
 
 
 def filter_events(
@@ -512,7 +592,7 @@ def build_employee_rows(data: dict[str, Any]) -> list[dict[str, Any]]:
     records = data["records"]
     latest_event_by_name: dict[str, dict[str, Any]] = {}
     todays_record_by_name: dict[str, dict[str, Any]] = {}
-    today = date.today().strftime(API_DATE_FORMAT)
+    today = get_current_datetime().date().strftime(API_DATE_FORMAT)
 
     for event in events:
         name = event.get("employee_name")
@@ -532,6 +612,7 @@ def build_employee_rows(data: dict[str, Any]) -> list[dict[str, Any]]:
                 "id": user["id"],
                 "name": user["name"],
                 "image_url": user.get("image_url"),
+                "department_role": user.get("department_role"),
                 "face_registered": user["face_registered"],
                 "last_seen": latest_event["timestamp"] if latest_event else None,
                 "current_status": today_record["current_status"] if today_record else "Absent / No activity today",
@@ -560,6 +641,7 @@ def get_employee_detail(employee_id: int, data: dict[str, Any]) -> dict[str, Any
         "id": employee["id"],
         "name": employee["name"],
         "image_url": employee.get("image_url"),
+        "department_role": employee.get("department_role"),
         "face_registered": employee["face_registered"],
         "latest_attendance_state": employee_records[0]["current_status"] if employee_records else "No attendance records",
         "latest_event": latest_event,

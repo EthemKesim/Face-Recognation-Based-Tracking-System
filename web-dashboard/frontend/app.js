@@ -1,11 +1,12 @@
-const state = {
+﻿const state = {
   summary: null,
   todayRecords: [],
   attendanceRecords: [],
   employees: [],
   logs: [],
-  rules: null,
   latestDetection: null,
+  station: null,
+  testTime: null,
   session: null,
   deletingEmployeeId: null,
   activeView: "dashboard",
@@ -17,12 +18,12 @@ const state = {
 };
 
 const VIEW_META = {
-  dashboard: "Professional admin view for your live face recognition attendance data.",
-  attendance: "Search and review structured attendance history without affecting live monitoring data.",
-  employees: "Inspect registered identities, current attendance state, and available employee actions.",
-  logs: "Review the latest parsed recognition events with focused search and event filters.",
-  rules: "Reference the attendance timing rules currently mirrored from the local Python system.",
-  register: "Register a new employee by capturing their face from your local camera.",
+  dashboard: "",
+  attendance: "",
+  employees: "",
+  logs: "",
+  reports: "",
+  settings: "",
 };
 
 const refreshLabel = document.getElementById("last-refresh");
@@ -42,9 +43,15 @@ const confirmAccept = document.getElementById("confirm-accept");
 const attendanceFiltersForm = document.getElementById("attendance-filters");
 const employeeFiltersForm = document.getElementById("employee-filters");
 const logFiltersForm = document.getElementById("log-filters");
+const stationStartButton = document.getElementById("station-start-btn");
+const stationStopButton = document.getElementById("station-stop-btn");
+const clearTestTimeButton = document.getElementById("clear-test-time-btn");
+const globalSearchInput = document.getElementById("global-search");
+const sidebarStartRecognitionButton = document.getElementById("sidebar-start-recognition");
 let confirmResolver = null;
 let cameraStream = null;
 let capturedImageDataUrl = null;
+let lastUnknownRedirectAt = 0;
 
 document.querySelectorAll(".nav-link").forEach((button) => {
   button.addEventListener("click", () => setView(button.dataset.view));
@@ -98,6 +105,15 @@ logoutButton.addEventListener("click", async () => {
   }
 });
 
+stationStartButton.addEventListener("click", () => setStationRunning(true));
+stationStopButton.addEventListener("click", () => setStationRunning(false));
+clearTestTimeButton.addEventListener("click", clearTestTimeOverride);
+globalSearchInput.addEventListener("input", applyGlobalSearch);
+sidebarStartRecognitionButton.addEventListener("click", async () => {
+  setView("settings");
+  await setStationRunning(true);
+});
+
 async function boot() {
   await loadSession();
   setView(state.activeView);
@@ -122,30 +138,51 @@ async function loadSession() {
 }
 
 async function refreshAll() {
-  const [summaryResponse, todayResponse, latestResponse, rulesResponse] = await Promise.all([
+  const [summaryResponse, todayResponse, latestResponse, stationResponse, testTimeResponse] = await Promise.all([
     api("/api/dashboard/summary"),
     api("/api/attendance/today"),
     api("/api/latest-detection"),
-    api("/api/status-rules"),
+    api("/api/camera-station/status"),
+    api("/api/test-time"),
   ]);
 
   state.summary = summaryResponse.summary;
   state.todayRecords = todayResponse.records;
   state.latestDetection = latestResponse.latest_detection;
-  state.rules = rulesResponse;
+  state.station = stationResponse.station || stationResponse;
+  state.testTime = testTimeResponse.test_time;
 
   await Promise.all([loadAttendanceRecords(), loadEmployees(), loadLogs()]);
 
   renderSummary();
+  renderAnalytics();
+  renderReports();
   renderAbsentToday();
+  renderAdminAlerts();
   renderLatestDetection();
+  renderStation();
+  renderTestTime();
   renderRecentDetections();
   renderTodayAttendance();
   renderAttendanceTable();
   renderEmployees();
   renderLogs();
-  renderRules();
   refreshLabel.textContent = `Last updated ${new Date().toLocaleString()}`;
+}
+
+async function setStationRunning(shouldRun) {
+  const button = shouldRun ? stationStartButton : stationStopButton;
+  button.disabled = true;
+  try {
+    const response = await api(shouldRun ? "/api/camera-station/start" : "/api/camera-station/stop", { method: "POST" });
+    state.station = response.station;
+    renderStation();
+    setFeedback("success", shouldRun ? "Camera station started." : "Camera station stopped.");
+  } catch (error) {
+    setFeedback("error", error.message);
+  } finally {
+    button.disabled = false;
+  }
 }
 
 async function loadAttendanceRecords() {
@@ -200,12 +237,16 @@ async function api(path, options = {}) {
 
 function renderSession() {
   sessionUser.textContent = state.session?.username
-    ? `Logged in as ${state.session.username}`
+    ? `${state.session.username} is logged in`
     : "Not signed in";
+  const avatar = document.getElementById("admin-avatar");
+  if (avatar) {
+    avatar.textContent = state.session?.username ? state.session.username.charAt(0).toUpperCase() : "A";
+  }
 }
 
 function setView(viewName) {
-  if (state.activeView === "register" && viewName !== "register") {
+  if (state.activeView === "settings" && viewName !== "settings") {
     stopCameraStream();
   }
   state.activeView = viewName;
@@ -217,7 +258,8 @@ function setView(viewName) {
     panel.classList.toggle("active", panel.dataset.viewPanel === viewName);
   });
 
-  pageTitle.textContent = document.querySelector(`.nav-link[data-view="${viewName}"] span:last-child`).textContent;
+  const activeNav = document.querySelector(`.nav-link[data-view="${viewName}"] span:last-child`);
+  pageTitle.textContent = activeNav ? activeNav.textContent : "Overview";
   topbarSubtitle.textContent = VIEW_META[viewName] || VIEW_META.dashboard;
 }
 
@@ -228,88 +270,416 @@ function renderSummary() {
     return;
   }
 
+  const unknownDetections = state.logs.filter((log) => log.status_group === "unknown" || statusGroupFromText(log.status) === "unknown").length;
   const cards = [
-    ["Total Registered Employees", state.summary.total_registered_employees],
-    ["Present Today", state.summary.present_today],
-    ["Absent Today", state.summary.absent_today ?? 0],
-    ["Late Today", state.summary.late_today],
-    ["Checked Out Today", state.summary.checked_out_today],
-    ["Overtime Employees", state.summary.overtime_employees],
+    ["Total Registered Employees", state.summary.total_registered_employees, "&#128101;"],
+    ["Present Today", state.summary.present_today, "&#9989;"],
+    ["Late Today", state.summary.late_today, "&#9200;"],
+    ["Unknown Detections", unknownDetections, "&#10067;"],
   ];
 
-  container.innerHTML = cards.map(([label, value]) => `
+  container.innerHTML = cards.map(([label, value, icon]) => `
     <article class="summary-card">
-      <p class="label">${escapeHtml(label)}</p>
+      <div class="summary-card-head">
+        <p class="label">${escapeHtml(label)}</p>
+        <span class="summary-icon summary-emoji">${icon}</span>
+      </div>
       <p class="value">${value}</p>
-      <p class="meta">Live data mirrored from the local attendance source.</p>
     </article>
   `).join("");
 }
 
-function renderLatestDetection() {
-  const container = document.getElementById("latest-detection");
-  const latest = state.latestDetection;
+function renderAnalytics() {
+  renderAttentionSummary();
+  renderLateWeek();
+  renderCheckFlow();
+}
 
-  if (!latest) {
-    container.innerHTML = `
-      <div class="empty-state">
-        No recognition events have been logged yet. Start your existing Python recognition script and this panel will update automatically.
-      </div>
-    `;
-    return;
-  }
+function renderAttentionSummary() {
+  const container = document.getElementById("attendance-trend-chart");
+  if (!container) return;
+  const lateCount = Number(state.summary?.late_today || 0);
+  const unknownCount = state.logs.filter((log) => log.status_group === "unknown" || statusGroupFromText(log.status) === "unknown").length;
+  const overtimeCount = Number(state.summary?.overtime_employees || 0);
+  const noCheckoutCount = state.todayRecords.filter((record) => record.entry_time && !record.exit_time).length;
+  const issues = [
+    { label: "Late", value: lateCount, group: lateCount ? "late" : "neutral" },
+    { label: "Unknown", value: unknownCount, group: unknownCount ? "unknown" : "neutral" },
+    { label: "No Check-Out", value: noCheckoutCount, group: noCheckoutCount ? "checkout" : "neutral" },
+    { label: "Overtime", value: overtimeCount, group: overtimeCount ? "overtime" : "neutral" },
+  ];
+  const needsAttention = issues.some((item) => item.value > 0);
 
   container.innerHTML = `
-    <p class="eyebrow">Latest Detected Employee</p>
-    <p class="identity">${escapeHtml(latest.employee_name)}</p>
-    <div class="metric-grid">
-      <div class="metric">
-        <div class="label">Timestamp</div>
-        <div class="value">${formatDateTime(latest.timestamp)}</div>
+    <div class="attention-head">
+      <div>
+        <span>Attention</span>
+        <strong>${needsAttention ? "Review needed" : "All clear"}</strong>
       </div>
-      <div class="metric">
-        <div class="label">Event Type</div>
-        <div class="value">${escapeHtml(latest.event_type)}</div>
+      <span class="attention-state ${needsAttention ? "warning" : "checkin"}">${needsAttention ? "!" : "OK"}</span>
+    </div>
+    <div class="attention-grid">
+      ${issues.map((item) => `
+        <div class="attention-item ${item.group}">
+          <span>${escapeHtml(item.label)}</span>
+          <strong>${item.value}</strong>
+        </div>
+      `).join("")}
+    </div>
+  `;
+}
+
+function renderAttendanceTrend() {
+  const container = document.getElementById("attendance-trend-chart");
+  const counts = new Map();
+  state.attendanceRecords.forEach((record) => {
+    counts.set(record.date, (counts.get(record.date) || 0) + (record.entry_time ? 1 : 0));
+  });
+  const points = [...counts.entries()].sort((a, b) => a[0].localeCompare(b[0])).slice(-7);
+  renderBars(container, points, "No attendance trend data yet.");
+}
+
+function renderLateWeek() {
+  const container = document.getElementById("late-week-chart");
+  const counts = new Map();
+  state.logs
+    .filter((log) => ["late", "warning", "violation"].includes(statusGroupFromText(log.status)))
+    .forEach((log) => counts.set(log.date || "Unknown", (counts.get(log.date || "Unknown") || 0) + 1));
+  const points = [...counts.entries()].sort((a, b) => a[0].localeCompare(b[0])).slice(-7);
+  renderBars(container, points, "No late arrivals found in current log data.");
+}
+
+function renderBars(container, points, emptyMessage) {
+  if (!container) return;
+  if (!points.length) {
+    container.innerHTML = `<div class="empty-state chart-empty">${escapeHtml(emptyMessage)}</div>`;
+    return;
+  }
+  const maxValue = Math.max(...points.map(([, value]) => value), 1);
+  container.innerHTML = points.map(([label, value]) => `
+    <div class="chart-row">
+      <span>${escapeHtml(shortDateLabel(label))}</span>
+      <div class="chart-track"><div class="chart-fill" style="width:${Math.max(8, (value / maxValue) * 100)}%"></div></div>
+      <strong>${value}</strong>
+    </div>
+  `).join("");
+}
+
+function renderCheckFlow() {
+  const container = document.getElementById("check-flow-chart");
+  if (!container) return;
+  const checkIns = state.todayRecords.filter((record) => record.entry_time).length;
+  const checkOuts = state.todayRecords.filter((record) => record.exit_time).length;
+  const stillInside = Math.max(checkIns - checkOuts, 0);
+  const totalRegistered = Number(state.summary?.total_registered_employees || 0);
+  const presentRate = totalRegistered ? Math.round((checkIns / totalRegistered) * 100) : 0;
+  container.innerHTML = `
+    <div class="today-overview-card">
+      <div>
+        <span>Present Rate</span>
+        <strong>${presentRate}%</strong>
       </div>
-      <div class="metric">
-        <div class="label">Status</div>
-        <div class="value">${badge(latest.status, latest.status_group)}</div>
-      </div>
-      <div class="metric">
-        <div class="label">Camera Integration</div>
-        <div class="value muted">Live event mirror from Python logs</div>
+      <div class="today-progress"><span style="width:${Math.max(3, Math.min(presentRate, 100))}%"></span></div>
+    </div>
+    <div class="flow-stats-row">
+      <div class="flow-stat checkin"><span>Check-In</span><strong>${checkIns}</strong></div>
+      <div class="flow-stat checkout"><span>Check-Out</span><strong>${checkOuts}</strong></div>
+      <div class="flow-stat neutral"><span>Still Inside</span><strong>${stillInside}</strong></div>
+    </div>
+  `;
+}
+
+function renderReports() {
+  const container = document.getElementById("reports-panel");
+  if (!container) return;
+  const lateCount = state.logs.filter((log) => ["late", "warning", "violation"].includes(statusGroupFromText(log.status))).length;
+  const overtimeCount = state.logs.filter((log) => statusGroupFromText(log.status) === "overtime").length;
+  const presentRate = state.summary?.total_registered_employees
+    ? Math.round(((state.summary.present_today || 0) / state.summary.total_registered_employees) * 100)
+    : 0;
+  const punctualCount = state.todayRecords.filter((record) => statusGroupFromText(record.current_status) === "checkin").length;
+
+  container.innerHTML = `
+    <article class="report-card hero-report">
+      <p class="eyebrow">Attendance Summary</p>
+      <h3>Today ${presentRate}% present</h3>
+    </article>
+    <article class="report-card">${reportMetric("Late Count", lateCount)}</article>
+    <article class="report-card">${reportMetric("Overtime Count", overtimeCount)}</article>
+    <article class="report-card">${reportMetric("Punctuality Overview", punctualCount)}</article>
+    <article class="report-card export-card">
+      <p class="eyebrow">Export</p>
+      <h3>Reports Ready</h3>
+    </article>
+  `;
+}
+
+function reportMetric(label, value) {
+  return `
+    <p class="eyebrow">${escapeHtml(label)}</p>
+    <h3>${value}</h3>
+  `;
+}
+
+function renderLatestDetection() {
+  const container = document.getElementById("latest-detection");
+  if (!container) return;
+  const latest = state.latestDetection;
+  const station = state.station || {};
+  const cameraLabel = station.online ? "Live" : station.worker_running ? "Starting" : "Offline";
+
+  const group = latest ? latest.status_group || statusGroupFromText(latest.status || latest.event_type) : "neutral";
+  container.innerHTML = `
+    <div class="camera-preview-card">
+      <div class="camera-preview-frame">
+        <img src="/api/camera-station/feed" alt="Live attendance camera preview">
+        <div class="camera-preview-shade"></div>
+        <div class="camera-live-pill ${station.online ? "online" : "offline"}">
+          <span></span>${escapeHtml(cameraLabel)}
+        </div>
+        <div class="camera-latest-card">
+          ${latest ? `
+            <div class="live-avatar">${escapeHtml(getInitials(latest.employee_name))}</div>
+            <div class="live-person-copy">
+              <p class="eyebrow">Latest Recognized</p>
+              <p class="identity" title="${escapeHtml(latest.employee_name)}">${escapeHtml(latest.employee_name)}</p>
+              <div class="live-status-line">
+                ${badge(latest.status, group)}
+                <span>${formatTimePart(latest.timestamp)}</span>
+              </div>
+            </div>
+          ` : `
+            <div class="live-avatar">?</div>
+            <div class="live-person-copy">
+              <p class="eyebrow">Latest Recognized</p>
+              <p class="identity">Waiting</p>
+              <div class="live-status-line"><span>No recognition events yet</span></div>
+            </div>
+          `}
+        </div>
       </div>
     </div>
   `;
 }
 
+function renderStation() {
+  const station = state.station || {};
+  const stateBadge = document.getElementById("station-state");
+  const statusGrid = document.getElementById("station-status");
+  const latest = document.getElementById("station-latest");
+  const statusLabel = station.online ? "Running" : station.worker_running ? "Starting" : "Stopped";
+  const lastFrame = station.last_frame_at ? formatDateTime(station.last_frame_at) : "No frames yet";
+  const logic = station.logic || {};
+
+  stateBadge.classList.toggle("offline", !station.online);
+  stateBadge.querySelector("span").textContent = statusLabel;
+  stationStartButton.disabled = Boolean(station.worker_running);
+  stationStopButton.disabled = !station.worker_running;
+
+  statusGrid.innerHTML = `
+    <div class="metric">
+      <div class="label">Camera Status</div>
+      <div class="value">${escapeHtml(statusLabel)}</div>
+    </div>
+    <div class="metric">
+      <div class="label">Recognition Status</div>
+      <div class="value">${escapeHtml(station.latest_recognition?.recognition_status || "Waiting")}</div>
+    </div>
+    <div class="metric">
+      <div class="label">Camera</div>
+      <div class="value">Index ${station.camera_index ?? 0}</div>
+    </div>
+    <div class="metric">
+      <div class="label">Registered Faces</div>
+      <div class="value">${station.known_faces ?? 0}</div>
+    </div>
+    <div class="metric">
+      <div class="label">Latest Frame</div>
+      <div class="value">${escapeHtml(lastFrame)}</div>
+    </div>
+    <div class="metric">
+      <div class="label">Check-out Window</div>
+      <div class="value">${formatSeconds(logic.check_out_after_seconds)}</div>
+    </div>
+    <div class="metric">
+      <div class="label">Re-entry Cooldown</div>
+      <div class="value">${formatSeconds(logic.reentry_after_seconds)}</div>
+    </div>
+    <div class="metric">
+      <div class="label">Check-in Liveness</div>
+      <div class="value">${escapeHtml(logic.checkin_liveness || "Unavailable")}</div>
+    </div>
+  `;
+
+  if (station.last_error) {
+    latest.innerHTML = `<div class="empty-state station-error">${escapeHtml(station.last_error)}</div>`;
+    return;
+  }
+
+  if (!station.latest_recognition) {
+    latest.innerHTML = `<div class="empty-state">Waiting for a recognized attendance event.</div>`;
+    return;
+  }
+
+  if (station.latest_recognition.recognition_status === "Unknown") {
+    latest.innerHTML = `
+      <article class="station-event station-unknown">
+        <p class="eyebrow">Registration Suggested</p>
+        <strong>Unknown Face</strong>
+        <div class="station-event-meta">
+          ${badge("Unknown", "unknown")}
+          <span>${formatDateTime(station.latest_recognition.timestamp)}</span>
+        </div>
+        <button class="secondary-button" type="button" id="open-register-from-unknown">Open Register</button>
+      </article>
+    `;
+    document.getElementById("open-register-from-unknown").addEventListener("click", () => setView("settings"));
+    autoOpenRegisterForUnknown();
+    return;
+  }
+
+  latest.innerHTML = `
+    <article class="station-event">
+      <p class="eyebrow">Latest Station Event</p>
+      <strong>${escapeHtml(station.latest_recognition.employee_name)}</strong>
+      <div class="station-event-meta">
+        ${badge(station.latest_recognition.status, statusGroupFromText(station.latest_recognition.status))}
+        <span>${formatDateTime(station.latest_recognition.timestamp)}</span>
+      </div>
+    </article>
+  `;
+}
+
+function autoOpenRegisterForUnknown() {
+  const now = Date.now();
+  if (state.activeView === "settings" || now - lastUnknownRedirectAt < 15000) {
+    return;
+  }
+  lastUnknownRedirectAt = now;
+  setFeedback("info", "Unknown face detected. Settings opened so you can register the employee.");
+  setView("settings");
+}
+
+function renderTestTime() {
+  const panel = document.getElementById("test-time-panel");
+  const status = document.getElementById("test-time-status");
+  const current = document.getElementById("test-time-current");
+  const testTime = state.testTime || {};
+  const scenarios = testTime.scenarios || [];
+
+  status.classList.toggle("offline", !testTime.active);
+  status.querySelector("span").textContent = testTime.active ? testTime.label : "Real System Time";
+  current.textContent = formatDateTime(testTime.current_datetime);
+  clearTestTimeButton.disabled = !testTime.active;
+
+  panel.innerHTML = scenarios.map((scenario) => `
+    <button class="scenario-button ${testTime.scenario_key === scenario.key ? "active" : ""}" data-scenario-key="${escapeHtml(scenario.key)}" type="button">
+      <span>${escapeHtml(scenario.label)}</span>
+      <strong>${escapeHtml(scenario.time.slice(0, 5))}</strong>
+    </button>
+  `).join("");
+
+  panel.querySelectorAll("[data-scenario-key]").forEach((button) => {
+    button.addEventListener("click", () => applyTestTimeOverride(button.dataset.scenarioKey));
+  });
+}
+
+async function applyTestTimeOverride(scenarioKey) {
+  try {
+    const response = await api("/api/test-time", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ scenario_key: scenarioKey }),
+    });
+    state.testTime = response.test_time;
+    renderTestTime();
+    setFeedback("success", `Attendance clock set to ${response.test_time.label}.`);
+  } catch (error) {
+    setFeedback("error", error.message);
+  }
+}
+
+async function clearTestTimeOverride() {
+  try {
+    const response = await api("/api/test-time/clear", { method: "POST" });
+    state.testTime = response.test_time;
+    renderTestTime();
+    setFeedback("success", "Attendance clock returned to real system time.");
+  } catch (error) {
+    setFeedback("error", error.message);
+  }
+}
+
 function renderRecentDetections() {
   const container = document.getElementById("recent-detections");
   const detections = state.summary?.recent_detections || [];
-  container.innerHTML = detections.length ? detections.map((event) => `
-    <article class="stack-item">
-      <div class="stack-item-header">
-        <strong class="stack-item-title">${escapeHtml(event.employee_name)}</strong>
-        ${badge(event.status, event.status_group)}
+  container.innerHTML = detections.length ? detections.map((event) => {
+    const group = event.status_group || statusGroupFromText(event.status || event.event_type);
+    return `
+    <article class="stack-item event-card ${group}">
+      <span class="event-dot ${group}"></span>
+      <div class="event-row-main">
+        <div class="event-row-copy">
+          <strong class="stack-item-title">${escapeHtml(event.employee_name)}</strong>
+          <p class="stack-item-meta">${formatTimePart(event.timestamp)} &middot; ${escapeHtml(event.event_type)}</p>
+        </div>
+        ${badge(event.status, group)}
       </div>
-      <p class="stack-item-meta">${formatDateTime(event.timestamp)} &middot; ${escapeHtml(event.event_type)}</p>
     </article>
-  `).join("") : `<div class="empty-state">No recent detections available.</div>`;
+  `;
+  }).join("") : `<div class="empty-state live-empty"><span class="empty-state-icon">?</span><strong>No recent detections available.</strong><span>New camera events will appear here.</span></div>`;
+}
+
+function renderAdminAlerts() {
+  const container = document.getElementById("admin-alerts");
+  if (!container) return;
+  const alerts = state.summary?.admin_alerts || [];
+
+  if (!alerts.length) {
+    container.innerHTML = `
+      <div class="empty-state admin-alert-clear">
+        <span class="empty-state-icon">OK</span>
+        <strong>No repeated late arrivals.</strong>
+        <span>Employees are below the alert threshold.</span>
+      </div>
+    `;
+    return;
+  }
+
+  container.innerHTML = alerts.map((alert) => `
+    <article class="admin-alert-item ${escapeHtml(alert.severity || "warning")}">
+      <div class="admin-alert-main">
+        ${avatarHtml(alert.employee_image_url, alert.employee_name, 38)}
+        <div>
+          <strong>${escapeHtml(alert.employee_name)}</strong>
+          <span>${escapeHtml(alert.count)} late arrivals in ${escapeHtml(alert.window_days)} days</span>
+        </div>
+      </div>
+      <div class="admin-alert-meta">
+        <span>Threshold ${escapeHtml(alert.threshold)}</span>
+        <span>${alert.latest_timestamp ? formatDatePart(alert.latest_timestamp) : "Recent"}</span>
+      </div>
+    </article>
+  `).join("");
 }
 
 function renderTodayAttendance() {
+  const tbody = document.getElementById("today-attendance-body");
+  if (!tbody) return;
   renderAttendanceRows(
-    document.getElementById("today-attendance-body"),
+    tbody,
     state.todayRecords,
-    "No attendance records have been logged for today yet. This snapshot only shows records dated today, while the live panels can still show the latest historical detection."
+    "No attendance records for today."
   );
 }
 
 function renderAttendanceTable() {
+  const tbody = document.getElementById("attendance-body");
+  if (!tbody) return;
   renderAttendanceRows(
-    document.getElementById("attendance-body"),
+    tbody,
     state.attendanceRecords,
-    "No attendance records matched the current filters."
+    "No attendance records found."
   );
 }
 
@@ -353,7 +723,7 @@ function renderEmployees() {
             ${avatarHtml(employee.image_url, employee.name)}
             <div>
               <span class="employee-name">${escapeHtml(employee.name)}</span>
-              <span class="subtle">Registered identity profile</span>
+              <span class="subtle">${escapeHtml(employee.department_role || "Registered identity profile")}</span>
             </div>
           </div>
         </td>
@@ -409,24 +779,21 @@ async function openEmployeeModal(employeeId) {
       <div class="detail-card">
         <div class="detail-label">Latest Attendance State</div>
         <div class="detail-value">${escapeHtml(employee.latest_attendance_state)}</div>
-        <p class="detail-note">Most recent structured status for this employee.</p>
       </div>
       <div class="detail-card">
         <div class="detail-label">Latest Event</div>
         <div class="detail-value">${employee.latest_event ? escapeHtml(employee.latest_event.status) : "No events yet"}</div>
-        <p class="detail-note">Latest parsed recognition event from the activity log.</p>
       </div>
       <div class="detail-card">
         <div class="detail-label">Late History</div>
         <div class="detail-value">${employee.late_history_count}</div>
-        <p class="detail-note">Attendance events flagged as late.</p>
       </div>
       <div class="detail-card">
         <div class="detail-label">Overtime History</div>
         <div class="detail-value">${employee.overtime_history_count}</div>
-        <p class="detail-note">Recorded overtime check-out events.</p>
       </div>
     </div>
+    ${employee.department_role ? `<p class="detail-note">Department / Role: ${escapeHtml(employee.department_role)}</p>` : ""}
     <section class="panel">
       <div class="panel-header">
         <div>
@@ -479,7 +846,7 @@ async function handleDeleteEmployee(employeeId, employeeName) {
 
   const confirmed = await confirmAction({
     title: "Are you sure you want to delete this employee?",
-    message: `${employeeName} will be removed from the employee list, face encoding records, and stored attendance history.`,
+    message: "",
     confirmLabel: "Delete Employee",
   });
   if (!confirmed) {
@@ -512,7 +879,7 @@ function renderLogs() {
   container.innerHTML = state.logs.length ? state.logs.map((log, index) => {
     const hasParsedData = Boolean(log.employee_name && log.timestamp);
     const supportingText = log.notes?.length
-      ? escapeHtml(log.notes.join(" • "))
+      ? escapeHtml(log.notes.join(" - "))
       : hasParsedData
       ? escapeHtml(log.status)
       : escapeHtml(log.raw || "No log data available.");
@@ -532,30 +899,6 @@ function renderLogs() {
       </article>
     `;
   }).join("") : `<div class="empty-state">No log entries matched the current filters.</div>`;
-}
-
-function renderRules() {
-  const container = document.getElementById("rules-panel");
-  if (!state.rules) {
-    container.innerHTML = "";
-    return;
-  }
-
-  container.innerHTML = state.rules.rules.map((rule) => `
-    <article class="rule-card">
-      <p class="eyebrow">${escapeHtml(rule.name)}</p>
-      <p class="rule-time">${escapeHtml(rule.time)}</p>
-      <p>${escapeHtml(rule.description)}</p>
-    </article>
-  `).join("") + `
-    <article class="rule-card source-paths-card">
-      <p class="eyebrow">Source Paths</p>
-      <p class="rule-time">Live Local Files</p>
-      <p class="muted">${escapeHtml(state.rules.database_path)}</p>
-      <p class="muted">${escapeHtml(state.rules.log_path)}</p>
-      <p class="muted">${escapeHtml(state.rules.source)}</p>
-    </article>
-  `;
 }
 
 function setFeedback(type, message) {
@@ -589,9 +932,26 @@ function badge(label, group) {
   return `<span class="badge ${group || "neutral"}">${escapeHtml(label)}</span>`;
 }
 
+function eventSymbol(group) {
+  const symbols = {
+    checkin: "+",
+    checkout: "-",
+    lunch: "~",
+    overtime: "^",
+    late: "!",
+    warning: "!",
+    violation: "!",
+    unknown: "?",
+  };
+  return symbols[group] || "i";
+}
+
 function statusGroupFromText(text) {
   const value = (text || "").toLowerCase();
-  if (value.includes("late") || value.includes("warning") || value.includes("violation")) return "late";
+  if (value.includes("unknown")) return "unknown";
+  if (value.includes("violation")) return "violation";
+  if (value.includes("warning")) return "warning";
+  if (value.includes("late")) return "late";
   if (value.includes("lunch")) return "lunch";
   if (value.includes("overtime")) return "overtime";
   if (value.includes("checked out") || value.includes("check-out")) return "checkout";
@@ -603,6 +963,20 @@ function formatDateTime(value) {
   if (!value) return "&mdash;";
   const date = new Date(value);
   return date.toLocaleString();
+}
+
+function formatDatePart(value) {
+  if (!value) return "&mdash;";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return escapeHtml(value);
+  return date.toLocaleDateString(undefined, { day: "2-digit", month: "short", year: "numeric" });
+}
+
+function formatTimePart(value) {
+  if (!value) return "&mdash;";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "";
+  return date.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit", second: "2-digit" });
 }
 
 function buildQueryString(formData) {
@@ -626,6 +1000,37 @@ function escapeHtml(value) {
     .replaceAll("\"", "&quot;")
     .replaceAll("<", "&lt;")
     .replaceAll(">", "&gt;");
+}
+
+function shortDateLabel(value) {
+  if (!value || value === "Unknown") return "Unknown";
+  const parts = value.split("-");
+  return parts.length === 3 ? `${parts[1]}/${parts[2]}` : value;
+}
+
+function applyGlobalSearch() {
+  const value = globalSearchInput.value.trim();
+  const formMap = {
+    attendance: attendanceFiltersForm,
+    employees: employeeFiltersForm,
+    logs: logFiltersForm,
+  };
+  const form = formMap[state.activeView];
+  if (!form) return;
+  const input = form.querySelector('input[name="search"]');
+  if (!input) return;
+  input.value = value;
+  form.dispatchEvent(new Event("submit", { cancelable: true }));
+}
+
+function formatSeconds(value) {
+  if (!Number.isFinite(value)) {
+    return "Unavailable";
+  }
+  if (value >= 60 && value % 60 === 0) {
+    return `${value / 60} min`;
+  }
+  return `${value} sec`;
 }
 
 function stopCameraStream() {
@@ -677,6 +1082,7 @@ function setRegisterFeedback(type, message) {
   const clearUploadBtn = document.getElementById("clear-upload-btn");
   const photoUpload = document.getElementById("photo-upload");
   const registerName = document.getElementById("register-name");
+  const registerDepartment = document.getElementById("register-department");
   const registerSubmitBtn = document.getElementById("register-submit-btn");
 
   // Source tab switching
@@ -814,6 +1220,7 @@ function setRegisterFeedback(type, message) {
 
   registerSubmitBtn.addEventListener("click", async () => {
     const name = registerName.value.trim();
+    const departmentRole = registerDepartment.value.trim();
     if (!name || !capturedImageDataUrl) return;
 
     registerSubmitBtn.disabled = true;
@@ -824,11 +1231,12 @@ function setRegisterFeedback(type, message) {
       const response = await api("/api/employees/register", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name, image: capturedImageDataUrl }),
+        body: JSON.stringify({ name, department_role: departmentRole, image: capturedImageDataUrl }),
       });
 
       setRegisterFeedback("success", `${response.name} registered successfully (ID: ${response.user_id}).`);
       registerName.value = "";
+      registerDepartment.value = "";
       stopCameraStream();
       await loadEmployees();
     } catch (err) {
@@ -858,7 +1266,13 @@ function renderAbsentToday() {
   if (!container) return;
   const absent = state.summary?.absent_employees || [];
   if (!absent.length) {
-    container.innerHTML = `<div class="empty-state">All registered employees have checked in today.</div>`;
+    container.innerHTML = `
+      <div class="empty-state absent-clear-state">
+        <span class="empty-state-icon">OK</span>
+        <strong>All registered employees have checked in.</strong>
+        <span>No missing check-ins today.</span>
+      </div>
+    `;
     return;
   }
   container.innerHTML = `<div class="absent-grid">${absent.map((emp) => `

@@ -5,6 +5,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from time_override import get_current_datetime
+
 
 PROJECT_ROOT = Path(__file__).resolve().parent
 DB_PATH = PROJECT_ROOT / "face_records.db"
@@ -38,10 +40,12 @@ def init_db() -> None:
                 full_name TEXT NOT NULL,
                 created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
                 status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'inactive')),
-                photo_path TEXT
+                photo_path TEXT,
+                department_role TEXT
             )
             """
         )
+        ensure_employee_optional_columns(cursor)
         cursor.execute(
             """
             CREATE TABLE IF NOT EXISTS attendance_logs (
@@ -106,6 +110,13 @@ def migrate_users_to_employees(cursor: sqlite3.Cursor) -> None:
         """
     )
 
+
+def ensure_employee_optional_columns(cursor: sqlite3.Cursor) -> None:
+    cursor.execute("PRAGMA table_info(employees)")
+    columns = {row["name"] for row in cursor.fetchall()}
+    if "department_role" not in columns:
+        cursor.execute("ALTER TABLE employees ADD COLUMN department_role TEXT")
+
     cursor.execute(
         """
         UPDATE employees
@@ -153,7 +164,7 @@ def migrate_text_logs_to_attendance(cursor: sqlite3.Cursor) -> None:
 
 def load_todays_attendance_state() -> dict[str, dict]:
     """Return {employee_name: {"type": "CHECK-IN"|"CHECK-OUT", "time": datetime}} for today's records."""
-    today = datetime.now().date().isoformat()
+    today = get_current_datetime().date().isoformat()
     state: dict[str, dict] = {}
 
     with get_connection() as connection:
@@ -178,13 +189,13 @@ def load_todays_attendance_state() -> dict[str, dict]:
             try:
                 t = datetime.strptime(f"{today} {exit_}", "%Y-%m-%d %H:%M:%S")
             except ValueError:
-                t = datetime.now()
+                t = get_current_datetime()
             state[name] = {"type": "CHECK-OUT", "time": t}
         elif entry:
             try:
                 t = datetime.strptime(f"{today} {entry}", "%Y-%m-%d %H:%M:%S")
             except ValueError:
-                t = datetime.now()
+                t = get_current_datetime()
             state[name] = {"type": "CHECK-IN", "time": t}
 
     return state
@@ -209,7 +220,12 @@ def load_registered_faces() -> tuple[list[Any], list[str]]:
     return known_encodings, known_names
 
 
-def insert_user(name: str, face_vector_json: str, photo_path: str | None = None) -> int:
+def insert_user(
+    name: str,
+    face_vector_json: str,
+    photo_path: str | None = None,
+    department_role: str | None = None,
+) -> int:
     with get_connection() as connection:
         cursor = connection.cursor()
         cursor.execute("INSERT INTO users (name, face_vector) VALUES (?, ?)", (name, face_vector_json))
@@ -224,6 +240,14 @@ def insert_user(name: str, face_vector_json: str, photo_path: str | None = None)
                 photo_path = COALESCE(excluded.photo_path, employees.photo_path)
             """,
             (user_id, name, photo_path),
+        )
+        cursor.execute(
+            """
+            UPDATE employees
+            SET department_role = ?
+            WHERE id = ?
+            """,
+            (department_role, user_id),
         )
         connection.commit()
         return user_id
@@ -337,7 +361,7 @@ def log_manual_event(user_id: int, event_type: str) -> dict[str, Any]:
         if employee is None:
             return {"success": False, "error": "Employee not found."}
 
-        now = datetime.now()
+        now = get_current_datetime()
         status = f"{event_type} (Manual)"
         upsert_attendance_log(cursor, user_id, status, now)
         connection.commit()

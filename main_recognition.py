@@ -4,6 +4,7 @@ import json
 from datetime import datetime, time
 from liveness_utils import check_liveness, is_fake_texture
 from database_utils import init_db, insert_user, load_registered_faces, load_todays_attendance_state, log_attendance_event
+from time_override import get_current_datetime
 
 KNOWN_ENCODINGS, KNOWN_NAMES = load_registered_faces()
 LIVENESS_STATUS = {}
@@ -120,7 +121,7 @@ def run_recognition():
                         if ear < 0.20:
                             LIVENESS_STATUS[i] = True
 
-                        current_time = datetime.now()
+                        current_time = get_current_datetime()
                         event_type = should_log_event(actual_name, current_time)
 
                         if event_type == "CHECK-OUT":

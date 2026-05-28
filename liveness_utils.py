@@ -1,7 +1,7 @@
 import cv2
 import numpy as np
 import dlib
-from scipy.spatial import distance as dist
+from pathlib import Path
 
 # -------------------------------
 # SETTINGS & MODELS
@@ -10,15 +10,16 @@ RIGHT_EYE_POINTS = list(range(36, 42))
 LEFT_EYE_POINTS = list(range(42, 48))
 
 detector = dlib.get_frontal_face_detector()
-predictor = dlib.shape_predictor("shape_predictor_68_face_landmarks.dat")
+PROJECT_ROOT = Path(__file__).resolve().parent
+predictor = dlib.shape_predictor(str(PROJECT_ROOT / "shape_predictor_68_face_landmarks.dat"))
 
 # -------------------------------
 # MATH HELPERS
 # -------------------------------
 def calculate_ear(eye):
-    A = dist.euclidean(eye[1], eye[5])
-    B = dist.euclidean(eye[2], eye[4])
-    C = dist.euclidean(eye[0], eye[3])
+    A = np.linalg.norm(eye[1] - eye[5])
+    B = np.linalg.norm(eye[2] - eye[4])
+    C = np.linalg.norm(eye[0] - eye[3])
     ear = (A + B) / (2.0 * C)
     return ear
 
