@@ -1,9 +1,10 @@
-<!DOCTYPE html>
+﻿<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Attendance Admin Dashboard</title>
+  <link rel="icon" type="image/png" href="/assets/favicon.png?v=5">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&family=Plus+Jakarta+Sans:wght@500;600;700&display=swap" rel="stylesheet">
@@ -13,36 +14,38 @@
   <div class="shell">
     <aside class="sidebar">
       <div class="brand">
-        <p class="brand-eyebrow">Local Admin Panel</p>
-        <h1>Face Attendance</h1>
-        <p class="brand-copy">Protected dashboard powered by your existing Python recognition system.</p>
+        <img class="brand-logo" src="/assets/logo-icon.png?v=5" alt="Face Attendance logo">
       </div>
 
       <nav class="nav">
-        <button class="nav-link active" data-view="dashboard"><span class="nav-icon">D</span><span>Dashboard</span></button>
-        <button class="nav-link" data-view="attendance"><span class="nav-icon">A</span><span>Attendance Records</span></button>
-        <button class="nav-link" data-view="employees"><span class="nav-icon">E</span><span>Registered Employees</span></button>
-        <button class="nav-link" data-view="logs"><span class="nav-icon">L</span><span>Activity Logs</span></button>
-        <button class="nav-link" data-view="rules"><span class="nav-icon">R</span><span>Status Rules</span></button>
-        <button class="nav-link" data-view="register"><span class="nav-icon">+</span><span>Register Employee</span></button>
+        <button class="nav-link active" data-view="dashboard"><span class="nav-icon icon-dashboard" aria-hidden="true"></span><span>Dashboard</span></button>
+        <button class="nav-link" data-view="attendance"><span class="nav-icon icon-clock" aria-hidden="true"></span><span>Attendance Records</span></button>
+        <button class="nav-link" data-view="employees"><span class="nav-icon icon-users" aria-hidden="true"></span><span>Registered Employees</span></button>
+        <button class="nav-link" data-view="logs"><span class="nav-icon icon-logs" aria-hidden="true"></span><span>Activity Logs</span></button>
+        <button class="nav-link" data-view="reports"><span class="nav-icon icon-chart" aria-hidden="true"></span><span>Reports</span></button>
+        <button class="nav-link" data-view="settings"><span class="nav-icon icon-settings" aria-hidden="true"></span><span>Settings</span></button>
       </nav>
-
       <div class="sidebar-footer">
         <p class="muted-label">Mode</p>
         <p class="sidebar-value">Admin Only</p>
         <p class="muted-label">Refresh</p>
         <p class="sidebar-value">Every 5 seconds</p>
+        <button id="sidebar-start-recognition" class="sidebar-action" type="button">Start Recognition</button>
       </div>
     </aside>
 
     <main class="content">
       <header class="topbar">
         <div class="topbar-copy">
-          <p class="eyebrow">Monitoring</p>
+          <p class="eyebrow">Live Workspace</p>
           <h2 id="page-title">Dashboard</h2>
-          <p id="topbar-subtitle" class="topbar-subtitle">Professional admin view for your live face recognition attendance data.</p>
+          <p id="topbar-subtitle" class="topbar-subtitle"></p>
         </div>
         <div class="topbar-actions">
+          <label class="global-search" aria-label="Search dashboard">
+            <span>S</span>
+            <input id="global-search" type="search" placeholder="Search employees, logs, status">
+          </label>
           <div class="status-pill">
             <div class="live-dot"></div>
             <span>Live sync</span>
@@ -53,6 +56,10 @@
           <div class="topbar-meta">
             <span id="last-refresh">Waiting for data</span>
           </div>
+          <button class="notification-button" type="button" aria-label="Notifications">!</button>
+          <div class="admin-profile" aria-label="Admin profile">
+            <span id="admin-avatar">A</span>
+          </div>
           <button id="logout-button" class="secondary-button" type="button">Logout</button>
         </div>
       </header>
@@ -62,64 +69,72 @@
       <section class="view active" data-view-panel="dashboard">
         <div class="summary-grid" id="summary-cards"></div>
 
-        <div class="two-column">
-          <section class="panel">
+        <div class="dashboard-focus-grid">
+          <section class="panel alerts-panel">
             <div class="panel-header">
               <div>
-                <p class="eyebrow">Live Local Monitoring</p>
-                <h3>Recognition Status</h3>
+                <p class="eyebrow">Admin Notifications</p>
+                <h3>Repeated Late Alerts</h3>
               </div>
             </div>
-            <div id="latest-detection" class="live-card"></div>
+            <div id="admin-alerts" class="admin-alert-list"></div>
           </section>
 
-          <section class="panel">
+          <section class="panel recent-panel">
             <div class="panel-header">
               <div>
                 <p class="eyebrow">Recent Detections</p>
-                <h3>Latest Real Events</h3>
+                <h3>Latest Events</h3>
               </div>
             </div>
-            <div id="recent-detections" class="stack-list"></div>
+            <div id="recent-detections" class="stack-list compact-feed"></div>
+          </section>
+
+          <section class="panel absent-panel">
+            <div class="panel-header">
+              <div>
+                <p class="eyebrow">Not checked in today</p>
+                <h3>Absent Employees</h3>
+              </div>
+            </div>
+            <div id="absent-list"></div>
           </section>
         </div>
+      </section>
 
-        <section class="panel">
-          <div class="panel-header">
-            <div>
-              <p class="eyebrow">Today</p>
-              <h3>Attendance Snapshot</h3>
+      <section class="view settings-section" data-view-panel="settings">
+        <div class="station-layout">
+          <section class="panel station-feed-panel">
+            <div class="panel-header">
+              <div>
+                <p class="eyebrow">Entrance Station</p>
+                <h3>Live Attendance Camera</h3>
+              </div>
+              <div id="station-state" class="status-pill">
+                <div class="live-dot"></div>
+                <span>Starting</span>
+              </div>
             </div>
-          </div>
-          <div class="table-wrap">
-            <table>
-              <thead>
-                <tr>
-                  <th>ID</th>
-                  <th>Employee Name</th>
-                  <th>Date</th>
-                  <th>Entry Time</th>
-                  <th>Exit Time</th>
-                  <th>Duration</th>
-                  <th>Current Status</th>
-                  <th>Event Type</th>
-                  <th>Notes</th>
-                </tr>
-              </thead>
-              <tbody id="today-attendance-body"></tbody>
-            </table>
-          </div>
-        </section>
+            <div class="station-feed-frame">
+              <img id="station-feed" src="/api/camera-station/feed" alt="Live attendance camera feed">
+            </div>
+            <div class="station-controls">
+              <button id="station-start-btn" class="primary-button" type="button">Start Camera</button>
+              <button id="station-stop-btn" class="secondary-button" type="button">Stop Camera</button>
+            </div>
+          </section>
 
-        <section class="panel">
-          <div class="panel-header">
-            <div>
-              <p class="eyebrow">Not checked in today</p>
-              <h3>Absent Employees</h3>
+          <section class="panel station-status-panel">
+            <div class="panel-header">
+              <div>
+                <p class="eyebrow">Station Status</p>
+                <h3>Recognition Worker</h3>
+              </div>
             </div>
-          </div>
-          <div id="absent-list"></div>
-        </section>
+            <div id="station-status" class="station-status-grid"></div>
+            <div id="station-latest" class="station-latest"></div>
+          </section>
+        </div>
       </section>
 
       <section class="view" data-view-panel="attendance">
@@ -227,21 +242,34 @@
         </section>
       </section>
 
-      <section class="view" data-view-panel="rules">
+      <section class="view" data-view-panel="reports">
+        <div class="reports-grid" id="reports-panel"></div>
+      </section>
+
+      <section class="view settings-section" data-view-panel="settings">
         <section class="panel">
           <div class="panel-header">
             <div>
-              <p class="eyebrow">Mirrored From Python</p>
-              <h3>Status Rules Reference</h3>
+              <p class="eyebrow">Presentation Utility</p>
+              <h3>Fast Time Testing</h3>
+            </div>
+            <div id="test-time-status" class="status-pill offline">
+              <div class="live-dot"></div>
+              <span>Real System Time</span>
             </div>
           </div>
-          <div id="rules-panel" class="rules-grid"></div>
+          <div id="test-time-panel" class="scenario-grid"></div>
+          <div class="test-time-footer">
+            <div>
+              <p class="eyebrow">Current Attendance Clock</p>
+              <p id="test-time-current" class="test-time-current">Loading</p>
+            </div>
+            <button id="clear-test-time-btn" class="secondary-button" type="button">Return to Real Time</button>
+          </div>
         </section>
       </section>
-    </main>
-  </div>
 
-      <section class="view" data-view-panel="register">
+      <section class="view settings-section" data-view-panel="settings">
         <section class="panel">
           <div class="panel-header">
             <div>
@@ -250,7 +278,6 @@
             </div>
           </div>
           <div class="register-layout">
-
             <div class="camera-panel">
               <div class="source-tabs">
                 <button class="source-tab active" data-source="camera" type="button">Live Camera</button>
@@ -277,7 +304,7 @@
                   <div class="upload-area-content">
                     <p>Click to select a photo</p>
                     <p class="muted">or drag and drop here</p>
-                    <p class="muted">JPG · PNG · WEBP · max 10 MB</p>
+                    <p class="muted">JPG / PNG / WEBP / max 10 MB</p>
                   </div>
                   <input type="file" id="photo-upload" accept="image/jpeg,image/png,image/webp">
                 </div>
@@ -291,15 +318,20 @@
             <div class="register-form-panel">
               <div class="field-group">
                 <label class="input-label" for="register-name">Employee Full Name</label>
-                <input type="text" id="register-name" placeholder="e.g. Ethem Kesim" autocomplete="off">
+                <input type="text" id="register-name" placeholder="Employee full name" autocomplete="off">
+              </div>
+              <div class="field-group">
+                <label class="input-label" for="register-department">Department / Role (Optional)</label>
+                <input type="text" id="register-department" placeholder="Optional role or department" autocomplete="off">
               </div>
               <button id="register-submit-btn" class="primary-button" type="button" disabled>Register Employee</button>
               <div id="register-feedback" class="feedback-banner"></div>
             </div>
-
           </div>
         </section>
       </section>
+    </main>
+  </div>
 
   <dialog id="employee-modal" class="modal">
     <div class="modal-card">

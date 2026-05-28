@@ -55,10 +55,17 @@ from database_utils import (
     delete_employee_record,
     employee_name_exists,
     insert_user,
+    init_db,
     load_registered_faces,
     log_manual_event,
     update_employee_photo,
 )
+from time_override import clear_time_override, read_time_override, set_time_override
+
+try:
+    from attendance_station import AttendanceStation
+except ImportError:
+    AttendanceStation = None  # type: ignore[assignment,misc]
 
 
 HOST = "127.0.0.1"
@@ -68,6 +75,7 @@ ENV_PATH = PROJECT_SOURCE_DIR / ".env"
 SESSION_COOKIE_NAME = "dashboard_session"
 SESSION_DURATION_SECONDS = 60 * 60 * 8
 PUBLIC_FRONTEND_FILES = {"styles.css"}
+CAMERA_STATION = AttendanceStation() if AttendanceStation is not None else None
 
 
 def load_local_env() -> None:
@@ -201,7 +209,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
             self.serve_file("login.html")
             return
 
-        if parsed.path.lstrip("/") in PUBLIC_FRONTEND_FILES:
+        if parsed.path.lstrip("/") in PUBLIC_FRONTEND_FILES or parsed.path.startswith("/assets/"):
             self.serve_frontend(parsed.path)
             return
 
@@ -209,6 +217,12 @@ class DashboardHandler(BaseHTTPRequestHandler):
             if not self.require_auth(is_api=False):
                 return
             self.serve_employee_image(parsed.path)
+            return
+
+        if parsed.path == "/api/camera-station/feed":
+            if not self.require_auth(is_api=False):
+                return
+            self.stream_camera_feed()
             return
 
         if parsed.path.startswith("/api/"):
@@ -243,6 +257,22 @@ class DashboardHandler(BaseHTTPRequestHandler):
 
         if parsed.path == "/api/employees/register":
             self.handle_employee_register()
+            return
+
+        if parsed.path == "/api/camera-station/start":
+            self.handle_camera_station_start()
+            return
+
+        if parsed.path == "/api/camera-station/stop":
+            self.handle_camera_station_stop()
+            return
+
+        if parsed.path == "/api/test-time":
+            self.handle_test_time_set()
+            return
+
+        if parsed.path == "/api/test-time/clear":
+            self.handle_test_time_clear()
             return
 
         employee_event = extract_employee_event(parsed.path)
@@ -350,8 +380,28 @@ class DashboardHandler(BaseHTTPRequestHandler):
             self.send_json({"latest_detection": data["latest_detection"]})
             return
 
+        if path == "/api/camera-station/status":
+            if CAMERA_STATION is None:
+                self.send_json(
+                    {
+                        "camera_index": 0,
+                        "online": False,
+                        "worker_running": False,
+                        "last_error": "Camera station dependencies are not available.",
+                        "known_faces": 0,
+                    }
+                )
+                return
+
+            self.send_json({"station": CAMERA_STATION.status()})
+            return
+
         if path == "/api/status-rules":
             self.send_json(get_status_rules())
+            return
+
+        if path == "/api/test-time":
+            self.send_json({"test_time": read_time_override()})
             return
 
         if path == "/api/health":
@@ -365,6 +415,36 @@ class DashboardHandler(BaseHTTPRequestHandler):
             return
 
         self.send_json({"error": "Endpoint not found."}, status=HTTPStatus.NOT_FOUND)
+
+    def handle_camera_station_start(self) -> None:
+        if CAMERA_STATION is None:
+            self.send_json({"error": "Camera station dependencies are not available."}, status=HTTPStatus.SERVICE_UNAVAILABLE)
+            return
+
+        CAMERA_STATION.start()
+        self.send_json({"station": CAMERA_STATION.status()})
+
+    def handle_camera_station_stop(self) -> None:
+        if CAMERA_STATION is None:
+            self.send_json({"error": "Camera station dependencies are not available."}, status=HTTPStatus.SERVICE_UNAVAILABLE)
+            return
+
+        CAMERA_STATION.stop()
+        self.send_json({"station": CAMERA_STATION.status()})
+
+    def handle_test_time_set(self) -> None:
+        payload = self.read_json_body()
+        scenario_key = str(payload.get("scenario_key", "")).strip()
+        try:
+            test_time = set_time_override(scenario_key)
+        except ValueError as exc:
+            self.send_json({"error": str(exc)}, status=HTTPStatus.BAD_REQUEST)
+            return
+
+        self.send_json({"test_time": test_time})
+
+    def handle_test_time_clear(self) -> None:
+        self.send_json({"test_time": clear_time_override()})
 
     def handle_login(self) -> None:
         payload = self.read_json_body()
@@ -412,6 +492,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
 
         payload = self.read_json_body()
         name = str(payload.get("name", "")).strip()
+        department_role = str(payload.get("department_role", "")).strip() or None
         image_data_url = str(payload.get("image", ""))
 
         if not name:
@@ -468,7 +549,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 return
 
         encoding_json = json.dumps(face_encodings[0].tolist())
-        user_id = insert_user(name, encoding_json)
+        user_id = insert_user(name, encoding_json, department_role=department_role)
 
         images_dir = PROJECT_SOURCE_DIR / "employee_images"
         images_dir.mkdir(exist_ok=True)
@@ -488,6 +569,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
             "success": True,
             "user_id": user_id,
             "name": name,
+            "department_role": department_role,
             "image_url": f"/employee_images/{image_filename}",
         })
 
@@ -607,6 +689,31 @@ class DashboardHandler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(candidate.read_bytes())
 
+    def stream_camera_feed(self) -> None:
+        if CAMERA_STATION is None:
+            self.send_error(HTTPStatus.SERVICE_UNAVAILABLE, "Camera station is unavailable.")
+            return
+
+        self.send_response(HTTPStatus.OK)
+        self.send_header("Content-Type", "multipart/x-mixed-replace; boundary=frame")
+        self.send_header("Cache-Control", "no-store")
+        self.end_headers()
+
+        version = -1
+        try:
+            while True:
+                version, jpeg = CAMERA_STATION.wait_for_frame(version)
+                if not jpeg:
+                    continue
+                self.wfile.write(b"--frame\r\n")
+                self.wfile.write(b"Content-Type: image/jpeg\r\n")
+                self.wfile.write(f"Content-Length: {len(jpeg)}\r\n\r\n".encode("ascii"))
+                self.wfile.write(jpeg)
+                self.wfile.write(b"\r\n")
+                self.wfile.flush()
+        except (BrokenPipeError, ConnectionResetError):
+            return
+
     def serve_frontend(self, raw_path: str) -> None:
         relative_path = raw_path.strip("/") or "index.html"
         candidate = (FRONTEND_DIR / relative_path).resolve()
@@ -664,6 +771,7 @@ def first_query_value(query: dict[str, list[str]], key: str) -> str | None:
 def run() -> None:
     load_local_env()
     get_auth_settings()
+    init_db()
     server = ThreadingHTTPServer((HOST, PORT), DashboardHandler)
     print(f"Dashboard server running at http://{HOST}:{PORT}")
     print(f"Reading database and logs from: {PROJECT_SOURCE_DIR}")
