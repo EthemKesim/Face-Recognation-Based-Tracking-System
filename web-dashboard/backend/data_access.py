@@ -12,6 +12,13 @@ from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
+try:
+    import openpyxl
+    from openpyxl.styles import Alignment, Font, PatternFill
+    OPENPYXL_AVAILABLE = True
+except ImportError:
+    OPENPYXL_AVAILABLE = False
+
 
 PROJECT_SOURCE_DIR = Path(__file__).resolve().parents[2]
 if str(PROJECT_SOURCE_DIR) not in sys.path:
@@ -451,10 +458,11 @@ def build_summary(
         if any("OVERTIME" in event["status"] for event in record.events)
     ]
 
+    active_users = [u for u in users if u.get("status") != "inactive"]
     present_names = {record.employee_name for record in present_today}
     absent_employees = [
         {"id": u["id"], "name": u["name"], "image_url": u.get("image_url")}
-        for u in users
+        for u in active_users
         if u["name"] not in present_names
     ]
 
@@ -613,6 +621,7 @@ def build_employee_rows(data: dict[str, Any]) -> list[dict[str, Any]]:
             {
                 "id": user["id"],
                 "name": user["name"],
+                "status": user.get("status", "active"),
                 "image_url": user.get("image_url"),
                 "department_role": user.get("department_role"),
                 "face_registered": user["face_registered"],
@@ -713,8 +722,136 @@ def attendance_records_to_csv(records: list[dict[str, Any]]) -> bytes:
 
 
 def build_export_filename(work_date: str | None = None) -> str:
-    """Build a sensible filename for the downloaded CSV."""
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     if work_date:
         return f"attendance_{work_date}_{timestamp}.csv"
     return f"attendance_export_{timestamp}.csv"
+
+
+def build_xlsx_filename(report_type: str, work_date: str | None = None) -> str:
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    if report_type and report_type != "all":
+        return f"attendance_{report_type}_{timestamp}.xlsx"
+    if work_date:
+        return f"attendance_{work_date}_{timestamp}.xlsx"
+    return f"attendance_export_{timestamp}.xlsx"
+
+
+XLSX_HEADERS = [
+    "Employee ID", "Employee Name", "Date", "Entry Time", "Exit Time",
+    "Duration", "Current Status", "Event Type", "Notes",
+]
+
+
+def _calc_duration(entry: str | None, exit_: str | None) -> str:
+    if not entry or not exit_:
+        return ""
+    try:
+        def _secs(t: str) -> int:
+            parts = t.split(":")
+            h, m = int(parts[0]), int(parts[1])
+            s = int(parts[2]) if len(parts) > 2 else 0
+            return h * 3600 + m * 60 + s
+        diff = _secs(exit_) - _secs(entry)
+        if diff <= 0:
+            return ""
+        hours, rem = divmod(diff, 3600)
+        mins = rem // 60
+        return f"{hours}h {mins}m" if hours > 0 else f"{mins}m"
+    except (ValueError, IndexError):
+        return ""
+
+
+def attendance_records_to_xlsx(records: list[dict[str, Any]]) -> bytes | None:
+    if not OPENPYXL_AVAILABLE:
+        return None
+
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "Attendance"
+
+    header_font = Font(bold=True, color="FFFFFF")
+    header_fill = PatternFill(start_color="2563EB", end_color="2563EB", fill_type="solid")
+    center = Alignment(horizontal="center", vertical="center")
+
+    for col_num, header in enumerate(XLSX_HEADERS, 1):
+        cell = ws.cell(row=1, column=col_num, value=header)
+        cell.font = header_font
+        cell.fill = header_fill
+        cell.alignment = center
+
+    for record in records:
+        notes = record.get("notes") or []
+        notes_text = "; ".join(notes) if isinstance(notes, list) else str(notes)
+        entry = record.get("entry_time") or ""
+        exit_ = record.get("exit_time") or ""
+        ws.append([
+            record.get("employee_id") if record.get("employee_id") is not None else "",
+            record.get("employee_name", ""),
+            record.get("date", ""),
+            entry,
+            exit_,
+            _calc_duration(entry or None, exit_ or None),
+            record.get("current_status", ""),
+            record.get("event_type", ""),
+            notes_text,
+        ])
+
+    for col in ws.columns:
+        col_letter = col[0].column_letter
+        max_len = max(
+            (len(str(cell.value)) for cell in col if cell.value is not None),
+            default=8,
+        )
+        ws.column_dimensions[col_letter].width = min(max(max_len + 2, 10), 45)
+
+    output = io.BytesIO()
+    wb.save(output)
+    return output.getvalue()
+
+
+def build_report_records(
+    report_type: str,
+    all_records: list[dict[str, Any]],
+    users: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    today = get_current_datetime().date()
+    today_str = today.strftime(API_DATE_FORMAT)
+
+    if report_type == "daily":
+        return [r for r in all_records if r.get("date") == today_str]
+
+    if report_type == "weekly":
+        week_start = (today - timedelta(days=6)).strftime(API_DATE_FORMAT)
+        return [r for r in all_records if week_start <= (r.get("date") or "") <= today_str]
+
+    if report_type == "monthly":
+        month_prefix = today.strftime("%Y-%m")
+        return [r for r in all_records if (r.get("date") or "").startswith(month_prefix)]
+
+    if report_type == "late":
+        return [
+            r for r in all_records
+            if "late" in (r.get("current_status") or "").lower()
+            or any("late" in (n or "").lower() for n in (r.get("notes") or []))
+        ]
+
+    if report_type == "absent":
+        active_users = [u for u in users if u.get("status") != "inactive"]
+        today_names = {r["employee_name"] for r in all_records if r.get("date") == today_str}
+        return [
+            {
+                "employee_id": u["id"],
+                "employee_name": u["name"],
+                "date": today_str,
+                "entry_time": None,
+                "exit_time": None,
+                "current_status": "Absent",
+                "event_type": "ABSENT",
+                "notes": [],
+            }
+            for u in active_users
+            if u["name"] not in today_names
+        ]
+
+    return all_records

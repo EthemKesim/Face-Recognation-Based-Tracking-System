@@ -9,6 +9,10 @@
   testTime: null,
   session: null,
   deletingEmployeeId: null,
+  editingEmployeeId: null,
+  unknownFaces: [],
+  adminLogs: [],
+  attendanceRules: null,
   activeView: "dashboard",
   filters: {
     attendance: "",
@@ -23,6 +27,8 @@ const VIEW_META = {
   employees: "",
   logs: "",
   reports: "",
+  "unknown-faces": "",
+  "admin-logs": "",
   settings: "",
 };
 
@@ -48,6 +54,14 @@ const stationStopButton = document.getElementById("station-stop-btn");
 const clearTestTimeButton = document.getElementById("clear-test-time-btn");
 const globalSearchInput = document.getElementById("global-search");
 const sidebarStartRecognitionButton = document.getElementById("sidebar-start-recognition");
+const editEmployeeModal = document.getElementById("edit-employee-modal");
+const editModalTitle = document.getElementById("edit-modal-title");
+const editModalClose = document.getElementById("edit-modal-close");
+const editNameInput = document.getElementById("edit-name");
+const editDepartmentInput = document.getElementById("edit-department");
+const editStatusSelect = document.getElementById("edit-status");
+const editSubmitBtn = document.getElementById("edit-submit-btn");
+const editFeedback = document.getElementById("edit-feedback");
 let confirmResolver = null;
 let cameraStream = null;
 let capturedImageDataUrl = null;
@@ -109,6 +123,25 @@ if (exportAttendanceButton) {
   });
 }
 
+const exportXlsxButton = document.getElementById("export-xlsx-button");
+if (exportXlsxButton) {
+  exportXlsxButton.addEventListener("click", async () => {
+    const formData = new FormData(attendanceFiltersForm);
+    const queryString = buildQueryString(formData);
+    const url = withQuery("/api/attendance/export", queryString ? `${queryString}&format=xlsx` : "format=xlsx");
+    await downloadFile(exportXlsxButton, url, "attendance_export.xlsx", "Exporting...");
+  });
+}
+
+document.addEventListener("click", async (event) => {
+  const btn = event.target.closest(".report-xlsx-btn");
+  if (!btn) return;
+  const reportType = btn.dataset.reportType;
+  if (!reportType) return;
+  const url = `/api/reports/export?type=${encodeURIComponent(reportType)}&format=xlsx`;
+  await downloadFile(btn, url, `report_${reportType}.xlsx`, "Exporting...");
+});
+
 employeeFiltersForm.addEventListener("submit", async (event) => {
   event.preventDefault();
   state.filters.employees = buildQueryString(new FormData(event.currentTarget));
@@ -127,6 +160,12 @@ modal.addEventListener("click", (event) => {
     modal.close();
   }
 });
+
+editModalClose.addEventListener("click", () => editEmployeeModal.close());
+editEmployeeModal.addEventListener("click", (event) => {
+  if (event.target === editEmployeeModal) editEmployeeModal.close();
+});
+editSubmitBtn.addEventListener("click", () => submitEmployeeEdit());
 
 confirmCancel.addEventListener("click", () => confirmDialog.close("cancel"));
 confirmAccept.addEventListener("click", () => confirmDialog.close("confirm"));
@@ -198,7 +237,7 @@ async function refreshAll() {
   state.station = stationResponse.station || stationResponse;
   state.testTime = testTimeResponse.test_time;
 
-  await Promise.all([loadAttendanceRecords(), loadEmployees(), loadLogs()]);
+  await Promise.all([loadAttendanceRecords(), loadEmployees(), loadLogs(), loadUnknownFaces(), loadAdminLogs(), loadAttendanceRules()]);
 
   renderSummary();
   renderAnalytics();
@@ -213,6 +252,9 @@ async function refreshAll() {
   renderAttendanceTable();
   renderEmployees();
   renderLogs();
+  renderUnknownFaces();
+  renderAdminLogs();
+  renderAttendanceRules();
   refreshLabel.textContent = `Last updated ${new Date().toLocaleString()}`;
 }
 
@@ -247,6 +289,30 @@ async function loadLogs() {
   const response = await api(withQuery("/api/logs", state.filters.logs));
   state.logs = response.logs;
   renderLogs();
+}
+
+async function loadUnknownFaces() {
+  try {
+    const response = await api("/api/unknown-faces");
+    state.unknownFaces = response.unknown_faces || [];
+    renderUnknownFaces();
+  } catch (_) {}
+}
+
+async function loadAdminLogs() {
+  try {
+    const response = await api("/api/admin-logs");
+    state.adminLogs = response.logs || [];
+    renderAdminLogs();
+  } catch (_) {}
+}
+
+async function loadAttendanceRules() {
+  try {
+    const response = await api("/api/attendance-rules");
+    state.attendanceRules = response.rules || null;
+    renderAttendanceRules();
+  } catch (_) {}
 }
 
 async function api(path, options = {}) {
@@ -762,14 +828,14 @@ function renderEmployees() {
   tbody.innerHTML = state.employees.length ? state.employees.map((employee) => {
     const isDeleting = state.deletingEmployeeId === employee.id;
     return `
-      <tr>
+      <tr${employee.status === "inactive" ? ' style="opacity:0.6"' : ""}>
         <td class="cell-compact">${employee.id}</td>
         <td class="record-name-cell">
           <div class="name-with-avatar">
             ${avatarHtml(employee.image_url, employee.name)}
             <div>
               <span class="employee-name">${escapeHtml(employee.name)}</span>
-              <span class="subtle">${escapeHtml(employee.department_role || "Registered identity profile")}</span>
+              <span class="subtle">${escapeHtml(employee.department_role || "Registered identity profile")}${employee.status === "inactive" ? " &middot; Inactive" : ""}</span>
             </div>
           </div>
         </td>
@@ -779,6 +845,14 @@ function renderEmployees() {
         <td>
           <div class="action-group">
             <button class="details-button" data-employee-id="${employee.id}" ${isDeleting ? "disabled" : ""}>Open</button>
+            <button
+              class="secondary-button edit-button"
+              data-employee-id="${employee.id}"
+              data-employee-name="${escapeHtml(employee.name)}"
+              data-employee-department="${escapeHtml(employee.department_role || "")}"
+              data-employee-status="${escapeHtml(employee.status || "active")}"
+              ${isDeleting ? "disabled" : ""}
+            >Edit</button>
             <button
               class="danger-button delete-button"
               data-employee-id="${employee.id}"
@@ -799,6 +873,10 @@ function renderEmployees() {
 
   tbody.querySelectorAll(".details-button").forEach((button) => {
     button.addEventListener("click", async () => openEmployeeModal(button.dataset.employeeId));
+  });
+
+  tbody.querySelectorAll(".edit-button").forEach((button) => {
+    button.addEventListener("click", () => openEditEmployeeModal(button.dataset));
   });
 
   tbody.querySelectorAll(".delete-button").forEach((button) => {
@@ -1345,6 +1423,251 @@ async function handleManualEvent(employeeId, eventType) {
     await refreshAll();
   } catch (error) {
     setFeedback("error", error.message);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Employee edit
+// ---------------------------------------------------------------------------
+
+function openEditEmployeeModal(dataset) {
+  state.editingEmployeeId = Number(dataset.employeeId);
+  editModalTitle.textContent = dataset.employeeName || "Employee";
+  editNameInput.value = dataset.employeeName || "";
+  editDepartmentInput.value = dataset.employeeDepartment || "";
+  editStatusSelect.value = dataset.employeeStatus || "active";
+  editFeedback.className = "feedback-banner";
+  editFeedback.textContent = "";
+  editEmployeeModal.showModal();
+}
+
+async function submitEmployeeEdit() {
+  const id = state.editingEmployeeId;
+  if (!id) return;
+
+  const fullName = editNameInput.value.trim();
+  const departmentRole = editDepartmentInput.value.trim();
+  const status = editStatusSelect.value;
+
+  if (!fullName) {
+    editFeedback.className = "feedback-banner error show";
+    editFeedback.textContent = "Employee name cannot be empty.";
+    return;
+  }
+
+  editSubmitBtn.disabled = true;
+  editSubmitBtn.textContent = "Saving...";
+
+  try {
+    await api(`/api/employees/${id}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ full_name: fullName, department_role: departmentRole, status }),
+    });
+    editFeedback.className = "feedback-banner success show";
+    editFeedback.textContent = "Employee updated successfully.";
+    setFeedback("success", `${fullName} updated.`);
+    await refreshAll();
+    setTimeout(() => editEmployeeModal.close(), 800);
+  } catch (err) {
+    editFeedback.className = "feedback-banner error show";
+    editFeedback.textContent = err.message || "Could not save changes.";
+  } finally {
+    editSubmitBtn.disabled = false;
+    editSubmitBtn.textContent = "Save Changes";
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Unknown faces
+// ---------------------------------------------------------------------------
+
+function renderUnknownFaces() {
+  const container = document.getElementById("unknown-faces-list");
+  if (!container) return;
+  const faces = state.unknownFaces || [];
+
+  if (!faces.length) {
+    container.innerHTML = `<div class="empty-state"><span class="empty-state-icon">?</span><strong>No unknown face detections recorded yet.</strong></div>`;
+    return;
+  }
+
+  container.innerHTML = faces.map((face, index) => `
+    <article class="log-item${index === 0 ? " recent" : ""}">
+      <div class="log-item-header">
+        <div class="name-with-avatar">
+          ${face.image_url
+            ? `<div class="avatar-wrap"><img src="${escapeHtml(face.image_url)}" class="avatar" style="width:40px;height:40px" alt="Unknown face" onerror="this.classList.add('avatar-error')"><span class="avatar avatar-fallback" style="width:40px;height:40px;font-size:12px">?</span></div>`
+            : `<span class="avatar avatar-fallback" style="width:40px;height:40px;font-size:12px">?</span>`
+          }
+          <strong>Unknown Face #${face.id}</strong>
+        </div>
+        <span class="badge unknown">Unknown</span>
+      </div>
+      <p class="timestamp">First seen: ${formatDateTime(face.first_seen)} &middot; Last seen: ${formatDateTime(face.last_seen)}</p>
+      <p class="log-item-body">Detected ${face.detection_count} time${face.detection_count !== 1 ? "s" : ""}</p>
+      <div style="margin-top:.5rem">
+        <button class="secondary-button register-unknown-btn" data-face-id="${face.id}" data-image-url="${escapeHtml(face.image_url || "")}" type="button">Register this person</button>
+      </div>
+    </article>
+  `).join("");
+
+  container.querySelectorAll(".register-unknown-btn").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      setView("settings");
+      setFeedback("info", "Navigate to the Register section below to register this face. You can upload the saved image.");
+    });
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Admin activity log
+// ---------------------------------------------------------------------------
+
+function renderAdminLogs() {
+  const tbody = document.getElementById("admin-logs-body");
+  if (!tbody) return;
+  const logs = state.adminLogs || [];
+
+  if (!logs.length) {
+    tbody.innerHTML = `<tr><td colspan="4"><div class="empty-state">No admin activity logged yet.</div></td></tr>`;
+    return;
+  }
+
+  tbody.innerHTML = logs.map((log) => `
+    <tr>
+      <td class="record-meta">${log.timestamp ? formatDateTime(log.timestamp) : "&mdash;"}</td>
+      <td class="cell-compact">${escapeHtml(log.admin_username)}</td>
+      <td>${badge(log.action_type, actionTypeBadgeGroup(log.action_type))}</td>
+      <td>${escapeHtml(log.details || "")}</td>
+    </tr>
+  `).join("");
+}
+
+function actionTypeBadgeGroup(actionType) {
+  const t = (actionType || "").toUpperCase();
+  if (t === "LOGIN") return "checkin";
+  if (t === "EMPLOYEE_DELETED") return "violation";
+  if (t.includes("CREATED") || t.includes("EDITED")) return "warning";
+  if (t.includes("EXPORT")) return "neutral";
+  if (t.includes("MANUAL")) return "late";
+  return "neutral";
+}
+
+// ---------------------------------------------------------------------------
+// Attendance rules
+// ---------------------------------------------------------------------------
+
+const RULE_LABELS = {
+  work_start: "Work Start Time",
+  late_warning: "Late Warning Threshold",
+  late_violation: "Late Violation Threshold",
+  lunch_start: "Lunch Break Start",
+  lunch_end: "Lunch Break End",
+  afternoon_warning: "Afternoon Warning",
+  afternoon_violation: "Afternoon Violation",
+  work_end: "Work End / Overtime Start",
+};
+
+function renderAttendanceRules() {
+  const container = document.getElementById("attendance-rules-panel");
+  if (!container) return;
+  const rules = state.attendanceRules;
+
+  if (!rules) {
+    container.innerHTML = `<div class="empty-state">Loading attendance rules&hellip;</div>`;
+    return;
+  }
+
+  const fields = Object.entries(RULE_LABELS).map(([key, label]) => `
+    <div class="field-group" style="max-width:340px">
+      <label class="input-label" for="rule-${key}">${escapeHtml(label)}</label>
+      <input type="time" id="rule-${key}" name="${key}" value="${escapeHtml(rules[key] || "")}" style="padding:.4rem .6rem;border:1px solid var(--border);border-radius:6px;font-size:.9rem">
+    </div>
+  `).join("");
+
+  container.innerHTML = `
+    <div style="display:flex;flex-wrap:wrap;gap:1rem">
+      ${fields}
+    </div>
+    <div style="margin-top:1rem">
+      <button id="save-rules-btn" class="primary-button" type="button">Save Rules</button>
+      <div id="rules-feedback" class="feedback-banner" style="margin-top:.5rem;display:inline-block;margin-left:1rem"></div>
+    </div>
+  `;
+
+  document.getElementById("save-rules-btn").addEventListener("click", async () => {
+    const btn = document.getElementById("save-rules-btn");
+    const feedback = document.getElementById("rules-feedback");
+    const updatedRules = {};
+    for (const key of Object.keys(RULE_LABELS)) {
+      const input = document.getElementById(`rule-${key}`);
+      if (input) updatedRules[key] = input.value;
+    }
+
+    btn.disabled = true;
+    btn.textContent = "Saving...";
+    try {
+      const response = await api("/api/attendance-rules", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(updatedRules),
+      });
+      state.attendanceRules = response.rules;
+      feedback.className = "feedback-banner success show";
+      feedback.textContent = "Attendance rules saved.";
+      setFeedback("success", "Attendance rules updated.");
+    } catch (err) {
+      feedback.className = "feedback-banner error show";
+      feedback.textContent = err.message || "Could not save rules.";
+    } finally {
+      btn.disabled = false;
+      btn.textContent = "Save Rules";
+    }
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Shared download helper
+// ---------------------------------------------------------------------------
+
+async function downloadFile(button, url, defaultFilename, loadingLabel) {
+  button.disabled = true;
+  const originalLabel = button.textContent;
+  button.textContent = loadingLabel;
+
+  try {
+    const response = await fetch(url, { cache: "no-store" });
+
+    if (response.status === 401) {
+      window.location.href = "/login";
+      return;
+    }
+
+    if (!response.ok) {
+      const payload = await response.json().catch(() => ({}));
+      throw new Error(payload.error || `Export failed: ${response.status}`);
+    }
+
+    const blob = await response.blob();
+    const downloadUrl = URL.createObjectURL(blob);
+    const filename = extractFilename(response.headers.get("Content-Disposition")) || defaultFilename;
+
+    const tempAnchor = document.createElement("a");
+    tempAnchor.href = downloadUrl;
+    tempAnchor.download = filename;
+    document.body.appendChild(tempAnchor);
+    tempAnchor.click();
+    document.body.removeChild(tempAnchor);
+    URL.revokeObjectURL(downloadUrl);
+
+    setFeedback("success", `Downloaded ${filename}.`);
+  } catch (error) {
+    setFeedback("error", error.message || "Could not download file.");
+    console.error(error);
+  } finally {
+    button.disabled = false;
+    button.textContent = originalLabel;
   }
 }
 

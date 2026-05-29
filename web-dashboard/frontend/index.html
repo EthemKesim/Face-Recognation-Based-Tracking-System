@@ -23,6 +23,8 @@
         <button class="nav-link" data-view="employees"><span class="nav-icon icon-users" aria-hidden="true"></span><span>Registered Employees</span></button>
         <button class="nav-link" data-view="logs"><span class="nav-icon icon-logs" aria-hidden="true"></span><span>Activity Logs</span></button>
         <button class="nav-link" data-view="reports"><span class="nav-icon icon-chart" aria-hidden="true"></span><span>Reports</span></button>
+        <button class="nav-link" data-view="unknown-faces"><span class="nav-icon icon-logs" aria-hidden="true"></span><span>Unknown Faces</span></button>
+        <button class="nav-link" data-view="admin-logs"><span class="nav-icon icon-logs" aria-hidden="true"></span><span>Admin Logs</span></button>
         <button class="nav-link" data-view="settings"><span class="nav-icon icon-settings" aria-hidden="true"></span><span>Settings</span></button>
       </nav>
       <div class="sidebar-footer">
@@ -157,6 +159,7 @@
               </select>
               <button type="submit">Apply</button>
               <button id="export-attendance-button" class="secondary-button" type="button" title="Download the currently filtered attendance records as a CSV file (Excel compatible)">Export CSV</button>
+              <button id="export-xlsx-button" class="secondary-button" type="button" title="Download the currently filtered attendance records as an Excel file (.xlsx)">Export Excel</button>
             </form>
           </div>
           <div class="table-wrap">
@@ -244,9 +247,72 @@
 
       <section class="view" data-view-panel="reports">
         <div class="reports-grid" id="reports-panel"></div>
+        <section class="panel" style="margin-top:1.5rem">
+          <div class="panel-header">
+            <div>
+              <p class="eyebrow">Export Reports</p>
+              <h3>Download Excel Reports</h3>
+            </div>
+          </div>
+          <div class="filter-row" style="flex-wrap:wrap;gap:.75rem;padding:1rem">
+            <button class="secondary-button report-xlsx-btn" data-report-type="daily" type="button">Daily Report (.xlsx)</button>
+            <button class="secondary-button report-xlsx-btn" data-report-type="weekly" type="button">Weekly Report (.xlsx)</button>
+            <button class="secondary-button report-xlsx-btn" data-report-type="monthly" type="button">Monthly Report (.xlsx)</button>
+            <button class="secondary-button report-xlsx-btn" data-report-type="late" type="button">Late Arrivals (.xlsx)</button>
+            <button class="secondary-button report-xlsx-btn" data-report-type="absent" type="button">Absent Employees (.xlsx)</button>
+          </div>
+        </section>
       </section>
 
-      <section class="view settings-section" data-view-panel="settings">
+      <section class="view" data-view-panel="unknown-faces">
+        <section class="panel">
+          <div class="panel-header">
+            <div>
+              <p class="eyebrow">Security</p>
+              <h3>Unknown Face Detections</h3>
+            </div>
+          </div>
+          <div id="unknown-faces-list" class="log-list"></div>
+        </section>
+      </section>
+
+      <section class="view" data-view-panel="admin-logs">
+        <section class="panel">
+          <div class="panel-header">
+            <div>
+              <p class="eyebrow">Audit Trail</p>
+              <h3>Admin Activity Log</h3>
+            </div>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Timestamp</th>
+                  <th>Admin</th>
+                  <th>Action</th>
+                  <th>Details</th>
+                </tr>
+              </thead>
+              <tbody id="admin-logs-body"></tbody>
+            </table>
+          </div>
+        </section>
+      </section>
+
+      <section class="view settings-section" data-view-panel="settings" style="margin-top:22px">
+        <section class="panel">
+          <div class="panel-header">
+            <div>
+              <p class="eyebrow">Attendance Configuration</p>
+              <h3>Attendance Rules</h3>
+            </div>
+          </div>
+          <div id="attendance-rules-panel" class="register-layout" style="flex-direction:column;gap:1rem;padding:1rem"></div>
+        </section>
+      </section>
+
+      <section class="view settings-section" data-view-panel="settings" style="margin-top:22px">
         <section class="panel">
           <div class="panel-header">
             <div>
@@ -269,7 +335,7 @@
         </section>
       </section>
 
-      <section class="view settings-section" data-view-panel="settings">
+      <section class="view settings-section" data-view-panel="settings" style="margin-top:22px">
         <section class="panel">
           <div class="panel-header">
             <div>
@@ -346,6 +412,41 @@
         <button id="modal-close" class="icon-button" aria-label="Close">&times;</button>
       </div>
       <div id="modal-content" class="modal-content"></div>
+    </div>
+  </dialog>
+
+  <dialog id="edit-employee-modal" class="modal">
+    <div class="modal-card">
+      <div class="modal-header">
+        <div class="modal-identity">
+          <div>
+            <p class="eyebrow">Edit Employee</p>
+            <h3 id="edit-modal-title">Employee</h3>
+          </div>
+        </div>
+        <button id="edit-modal-close" class="icon-button" aria-label="Close">&times;</button>
+      </div>
+      <div class="modal-content">
+        <div class="register-form-panel" style="width:100%">
+          <div class="field-group">
+            <label class="input-label" for="edit-name">Full Name</label>
+            <input type="text" id="edit-name" autocomplete="off">
+          </div>
+          <div class="field-group">
+            <label class="input-label" for="edit-department">Department / Role</label>
+            <input type="text" id="edit-department" autocomplete="off">
+          </div>
+          <div class="field-group">
+            <label class="input-label" for="edit-status">Status</label>
+            <select id="edit-status">
+              <option value="active">Active</option>
+              <option value="inactive">Inactive</option>
+            </select>
+          </div>
+          <button id="edit-submit-btn" class="primary-button" type="button">Save Changes</button>
+          <div id="edit-feedback" class="feedback-banner" style="margin-top:.75rem"></div>
+        </div>
+      </div>
     </div>
   </dialog>
 

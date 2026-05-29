@@ -18,8 +18,11 @@ try:
         from .data_access import (
         PROJECT_SOURCE_DIR,
         attendance_records_to_csv,
+        attendance_records_to_xlsx,
         build_employee_rows,
         build_export_filename,
+        build_report_records,
+        build_xlsx_filename,
         filter_events,
         filter_records,
         get_dashboard_data,
@@ -31,8 +34,11 @@ except ImportError:
         from data_access import (
         PROJECT_SOURCE_DIR,
         attendance_records_to_csv,
+        attendance_records_to_xlsx,
         build_employee_rows,
         build_export_filename,
+        build_report_records,
+        build_xlsx_filename,
         filter_events,
         filter_records,
         get_dashboard_data,
@@ -54,11 +60,19 @@ except ImportError:
 from database_utils import (
     delete_employee_record,
     employee_name_exists,
+    get_attendance_rules,
+    get_unknown_face,
     insert_user,
     init_db,
     load_registered_faces,
+    load_unknown_faces,
     log_manual_event,
+    read_admin_logs,
+    record_unknown_face,
+    update_attendance_rules,
+    update_employee_data,
     update_employee_photo,
+    write_admin_log,
 )
 from time_override import clear_time_override, read_time_override, set_time_override
 
@@ -184,6 +198,13 @@ def extract_employee_id(path: str) -> int | None:
     return None
 
 
+def extract_unknown_face_id(path: str) -> int | None:
+    parts = [part for part in path.strip("/").split("/") if part]
+    if len(parts) == 3 and parts[0] == "api" and parts[1] == "unknown-faces" and parts[2].isdigit():
+        return int(parts[2])
+    return None
+
+
 def extract_employee_event(path: str) -> tuple[int, str] | None:
     parts = [part for part in path.strip("/").split("/") if part]
     if len(parts) == 4 and parts[0] == "api" and parts[1] == "employees" and parts[2].isdigit():
@@ -217,6 +238,12 @@ class DashboardHandler(BaseHTTPRequestHandler):
             if not self.require_auth(is_api=False):
                 return
             self.serve_employee_image(parsed.path)
+            return
+
+        if parsed.path.startswith("/unknown_face_images/"):
+            if not self.require_auth(is_api=False):
+                return
+            self.serve_unknown_face_image(parsed.path)
             return
 
         if parsed.path == "/api/camera-station/feed":
@@ -275,9 +302,34 @@ class DashboardHandler(BaseHTTPRequestHandler):
             self.handle_test_time_clear()
             return
 
+        if parsed.path == "/api/attendance-rules":
+            self.handle_attendance_rules_update()
+            return
+
         employee_event = extract_employee_event(parsed.path)
         if employee_event is not None:
             self.handle_manual_event(*employee_event)
+            return
+
+        self.send_json({"error": "Endpoint not found."}, status=HTTPStatus.NOT_FOUND)
+
+    def do_PUT(self) -> None:
+        parsed = urlparse(self.path)
+
+        if not parsed.path.startswith("/api/"):
+            self.send_json({"error": "Endpoint not found."}, status=HTTPStatus.NOT_FOUND)
+            return
+
+        if not self.require_auth(is_api=True):
+            return
+
+        employee_id = extract_employee_id(parsed.path)
+        if employee_id is not None:
+            self.handle_employee_edit(employee_id)
+            return
+
+        if parsed.path == "/api/attendance-rules":
+            self.handle_attendance_rules_update()
             return
 
         self.send_json({"error": "Endpoint not found."}, status=HTTPStatus.NOT_FOUND)
@@ -358,9 +410,44 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 work_date=work_date,
                 status_filter=status_filter,
             )
-            csv_bytes = attendance_records_to_csv(records)
-            filename = build_export_filename(work_date)
-            self.send_csv(csv_bytes, filename)
+            fmt = first_query_value(query, "format") or "csv"
+            if fmt == "xlsx":
+                xlsx_bytes = attendance_records_to_xlsx(records)
+                if xlsx_bytes is None:
+                    self.send_json({"error": "openpyxl is not installed on this server."}, status=HTTPStatus.SERVICE_UNAVAILABLE)
+                    return
+                filename = build_xlsx_filename("all", work_date)
+                self.send_xlsx(xlsx_bytes, filename)
+                session = self.get_authenticated_session()
+                username = session["username"] if session else "unknown"
+                write_admin_log(username, "EXPORT_DOWNLOADED", f"Excel export: {filename}")
+            else:
+                csv_bytes = attendance_records_to_csv(records)
+                filename = build_export_filename(work_date)
+                self.send_csv(csv_bytes, filename)
+                session = self.get_authenticated_session()
+                username = session["username"] if session else "unknown"
+                write_admin_log(username, "EXPORT_DOWNLOADED", f"CSV export: {filename}")
+            return
+
+        if path == "/api/reports/export":
+            report_type = first_query_value(query, "type") or "all"
+            fmt = first_query_value(query, "format") or "xlsx"
+            records = build_report_records(report_type, data["records"], data["users"])
+            if fmt == "csv":
+                csv_bytes = attendance_records_to_csv(records)
+                filename = build_export_filename(None).replace("attendance_export", f"report_{report_type}")
+                self.send_csv(csv_bytes, filename)
+            else:
+                xlsx_bytes = attendance_records_to_xlsx(records)
+                if xlsx_bytes is None:
+                    self.send_json({"error": "openpyxl is not installed on this server."}, status=HTTPStatus.SERVICE_UNAVAILABLE)
+                    return
+                filename = build_xlsx_filename(report_type)
+                self.send_xlsx(xlsx_bytes, filename)
+            session = self.get_authenticated_session()
+            username = session["username"] if session else "unknown"
+            write_admin_log(username, "EXPORT_DOWNLOADED", f"Report export: {report_type} as {fmt}")
             return
 
         if path == "/api/logs":
@@ -398,6 +485,29 @@ class DashboardHandler(BaseHTTPRequestHandler):
 
         if path == "/api/status-rules":
             self.send_json(get_status_rules())
+            return
+
+        if path == "/api/attendance-rules":
+            self.send_json({"rules": get_attendance_rules()})
+            return
+
+        if path == "/api/unknown-faces":
+            faces = load_unknown_faces()
+            self.send_json({"unknown_faces": faces})
+            return
+
+        unknown_face_id = extract_unknown_face_id(path)
+        if unknown_face_id is not None:
+            face = get_unknown_face(unknown_face_id)
+            if face is None:
+                self.send_json({"error": "Unknown face record not found."}, status=HTTPStatus.NOT_FOUND)
+                return
+            self.send_json({"face": face})
+            return
+
+        if path == "/api/admin-logs":
+            logs = read_admin_logs()
+            self.send_json({"logs": logs})
             return
 
         if path == "/api/test-time":
@@ -461,6 +571,11 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 status=HTTPStatus.UNAUTHORIZED,
             )
             return
+
+        try:
+            write_admin_log(username, "LOGIN", "Admin logged in")
+        except Exception:
+            pass
 
         self.send_json(
             {"authenticated": True, "username": username},
@@ -565,6 +680,13 @@ class DashboardHandler(BaseHTTPRequestHandler):
         relative_path = f"employee_images/{image_filename}"
         update_employee_photo(user_id, relative_path)
 
+        session = self.get_authenticated_session()
+        username = session["username"] if session else "unknown"
+        try:
+            write_admin_log(username, "EMPLOYEE_CREATED", f"Registered: {name} (ID: {user_id})")
+        except Exception:
+            pass
+
         self.send_json({
             "success": True,
             "user_id": user_id,
@@ -578,6 +700,13 @@ class DashboardHandler(BaseHTTPRequestHandler):
         if not result["success"]:
             self.send_json({"error": result["error"]}, status=HTTPStatus.NOT_FOUND)
             return
+        session = self.get_authenticated_session()
+        username = session["username"] if session else "unknown"
+        action = "MANUAL_CHECKIN" if event_type == "CHECK-IN" else "MANUAL_CHECKOUT"
+        try:
+            write_admin_log(username, action, f"{result['employee_name']} (ID: {employee_id})")
+        except Exception:
+            pass
         self.send_json(result)
 
     def handle_employee_delete(self, employee_id: int) -> None:
@@ -585,6 +714,13 @@ class DashboardHandler(BaseHTTPRequestHandler):
         if not result["deleted"]:
             self.send_json({"error": result["error"]}, status=HTTPStatus.NOT_FOUND)
             return
+
+        session = self.get_authenticated_session()
+        username = session["username"] if session else "unknown"
+        try:
+            write_admin_log(username, "EMPLOYEE_DELETED", f"Deleted: {result['employee_name']} (ID: {employee_id})")
+        except Exception:
+            pass
 
         message = f'{result["employee_name"]} was deleted successfully.'
         payload = {
@@ -597,6 +733,45 @@ class DashboardHandler(BaseHTTPRequestHandler):
             payload["warning"] = result["warning"]
 
         self.send_json(payload, status=HTTPStatus.OK)
+
+    def handle_employee_edit(self, employee_id: int) -> None:
+        payload = self.read_json_body()
+        full_name = str(payload.get("full_name", "")).strip() or None
+        department_role = payload.get("department_role")
+        if department_role is not None:
+            department_role = str(department_role).strip()
+        status = str(payload.get("status", "")).strip() or None
+
+        result = update_employee_data(employee_id, full_name=full_name, department_role=department_role, status=status)
+        if not result["success"]:
+            self.send_json({"error": result["error"]}, status=HTTPStatus.NOT_FOUND)
+            return
+
+        session = self.get_authenticated_session()
+        username = session["username"] if session else "unknown"
+        changes = ", ".join(
+            f"{k}={v}"
+            for k, v in {"name": full_name, "role": department_role, "status": status}.items()
+            if v is not None
+        )
+        try:
+            write_admin_log(username, "EMPLOYEE_EDITED", f"ID: {employee_id} — {changes}")
+        except Exception:
+            pass
+
+        self.send_json({"success": True, "employee_id": employee_id})
+
+    def handle_attendance_rules_update(self) -> None:
+        payload = self.read_json_body()
+        rules = {k: str(v).strip() for k, v in payload.items() if isinstance(v, str)}
+        update_attendance_rules(rules)
+        session = self.get_authenticated_session()
+        username = session["username"] if session else "unknown"
+        try:
+            write_admin_log(username, "RULES_UPDATED", f"Attendance rules updated: {rules}")
+        except Exception:
+            pass
+        self.send_json({"success": True, "rules": get_attendance_rules()})
 
     def get_authenticated_session(self) -> dict[str, str] | None:
         if hasattr(self, "_cached_session"):
@@ -689,6 +864,28 @@ class DashboardHandler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(candidate.read_bytes())
 
+    def serve_unknown_face_image(self, raw_path: str) -> None:
+        relative_path = raw_path.lstrip("/")
+        candidate = (PROJECT_SOURCE_DIR / relative_path).resolve()
+        unknown_images_dir = (PROJECT_SOURCE_DIR / "unknown_face_images").resolve()
+
+        try:
+            candidate.relative_to(unknown_images_dir)
+        except ValueError:
+            self.send_error(HTTPStatus.NOT_FOUND)
+            return
+
+        if not candidate.exists() or candidate.is_dir():
+            self.send_error(HTTPStatus.NOT_FOUND)
+            return
+
+        content_type, _ = mimetypes.guess_type(candidate.name)
+        self.send_response(HTTPStatus.OK)
+        self.send_header("Content-Type", content_type or "image/jpeg")
+        self.send_header("Cache-Control", "max-age=3600")
+        self.end_headers()
+        self.wfile.write(candidate.read_bytes())
+
     def stream_camera_feed(self) -> None:
         if CAMERA_STATION is None:
             self.send_error(HTTPStatus.SERVICE_UNAVAILABLE, "Camera station is unavailable.")
@@ -752,6 +949,20 @@ class DashboardHandler(BaseHTTPRequestHandler):
     ) -> None:
         self.send_response(status)
         self.send_header("Content-Type", "text/csv; charset=utf-8")
+        self.send_header("Content-Disposition", f'attachment; filename="{filename}"')
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def send_xlsx(
+        self,
+        body: bytes,
+        filename: str,
+        status: HTTPStatus = HTTPStatus.OK,
+    ) -> None:
+        self.send_response(status)
+        self.send_header("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
         self.send_header("Content-Disposition", f'attachment; filename="{filename}"')
         self.send_header("Cache-Control", "no-store")
         self.send_header("Content-Length", str(len(body)))
