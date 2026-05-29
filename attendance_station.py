@@ -12,10 +12,12 @@ import face_recognition
 from database_utils import (
     LOG_DATETIME_FORMAT,
     LOG_PATH,
+    PROJECT_ROOT,
     init_db,
     load_registered_faces,
     load_todays_attendance_state,
     log_attendance_event,
+    record_unknown_face,
 )
 from liveness_utils import check_liveness, is_fake_texture
 from time_override import get_current_datetime, read_time_override
@@ -206,7 +208,7 @@ class AttendanceStation:
             if name:
                 label = self._handle_known_face(name, frame, (top, right, bottom, left))
             else:
-                self._record_unknown_detection()
+                self._record_unknown_detection(frame, (top, right, bottom, left))
 
             results.append((top, right, bottom, left, label))
 
@@ -278,12 +280,37 @@ class AttendanceStation:
             self.lock.notify_all()
         return name
 
-    def _record_unknown_detection(self) -> None:
+    def _record_unknown_detection(self, frame=None, location=None) -> None:
         now = get_current_datetime()
         if self.last_unknown_at and (now - self.last_unknown_at).total_seconds() < 3:
             return
 
         self.last_unknown_at = now
+
+        image_path: str | None = None
+        if frame is not None:
+            try:
+                images_dir = PROJECT_ROOT / "unknown_face_images"
+                images_dir.mkdir(exist_ok=True)
+                filename = f"unknown_{now.strftime('%Y%m%d_%H%M%S')}.jpg"
+                full_path = images_dir / filename
+                if location is not None:
+                    top, right, bottom, left = location
+                    h, w = frame.shape[:2]
+                    pad = 40
+                    crop = frame[max(0, top - pad):min(h, bottom + pad), max(0, left - pad):min(w, right + pad)]
+                    cv2.imwrite(str(full_path), crop if crop.size > 0 else frame)
+                else:
+                    cv2.imwrite(str(full_path), frame)
+                image_path = f"unknown_face_images/{filename}"
+            except Exception:
+                pass
+
+        try:
+            record_unknown_face(image_path)
+        except Exception:
+            pass
+
         with self.lock:
             self.latest_recognition = {
                 "recognition_status": "Unknown",
@@ -292,6 +319,7 @@ class AttendanceStation:
                 "status": "Unknown face detected",
                 "timestamp": now.isoformat(),
                 "registration_suggested": True,
+                "image_url": (f"/{image_path}" if image_path else None),
             }
             self.lock.notify_all()
 

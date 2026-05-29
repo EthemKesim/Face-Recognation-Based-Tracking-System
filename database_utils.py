@@ -13,6 +13,17 @@ DB_PATH = PROJECT_ROOT / "face_records.db"
 LOG_PATH = PROJECT_ROOT / "attendance_logs.txt"
 LOG_DATETIME_FORMAT = "%d/%m/%Y %H:%M:%S"
 
+ATTENDANCE_RULE_DEFAULTS: dict[str, str] = {
+    "work_start": "09:00",
+    "late_warning": "09:15",
+    "late_violation": "09:30",
+    "lunch_start": "12:00",
+    "lunch_end": "13:15",
+    "afternoon_warning": "13:30",
+    "afternoon_violation": "13:45",
+    "work_end": "18:00",
+}
+
 
 def get_connection() -> sqlite3.Connection:
     connection = sqlite3.connect(DB_PATH)
@@ -91,6 +102,34 @@ def init_db() -> None:
             """
             CREATE INDEX IF NOT EXISTS idx_employees_full_name
             ON employees(full_name)
+            """
+        )
+        cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS unknown_faces (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                first_seen TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                last_seen TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                image_path TEXT,
+                detection_count INTEGER NOT NULL DEFAULT 1
+            )
+            """
+        )
+        cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS admin_activity_log (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                timestamp TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                admin_username TEXT NOT NULL,
+                action_type TEXT NOT NULL,
+                details TEXT
+            )
+            """
+        )
+        cursor.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_admin_log_timestamp
+            ON admin_activity_log(timestamp)
             """
         )
 
@@ -479,3 +518,202 @@ def determine_attendance_status(status: str) -> str:
     if "ABSENT" in normalized:
         return "absent"
     return "on_time"
+
+
+# ---------------------------------------------------------------------------
+# Employee edit
+# ---------------------------------------------------------------------------
+
+def update_employee_data(
+    user_id: int,
+    full_name: str | None = None,
+    department_role: str | None = None,
+    status: str | None = None,
+) -> dict[str, Any]:
+    with get_connection() as connection:
+        cursor = connection.cursor()
+        cursor.execute("SELECT id FROM employees WHERE id = ?", (user_id,))
+        if cursor.fetchone() is None:
+            return {"success": False, "error": "Employee not found."}
+
+        if full_name is not None:
+            cursor.execute("UPDATE employees SET full_name = ? WHERE id = ?", (full_name, user_id))
+            cursor.execute("UPDATE users SET name = ? WHERE id = ?", (full_name, user_id))
+        if department_role is not None:
+            cursor.execute("UPDATE employees SET department_role = ? WHERE id = ?", (department_role, user_id))
+        if status in ("active", "inactive"):
+            cursor.execute("UPDATE employees SET status = ? WHERE id = ?", (status, user_id))
+        connection.commit()
+
+    return {"success": True, "employee_id": user_id}
+
+
+# ---------------------------------------------------------------------------
+# Unknown faces
+# ---------------------------------------------------------------------------
+
+def record_unknown_face(image_path: str | None = None) -> int:
+    now = get_current_datetime()
+    with get_connection() as connection:
+        cursor = connection.cursor()
+        cursor.execute(
+            "SELECT id, image_path, last_seen FROM unknown_faces ORDER BY last_seen DESC LIMIT 1"
+        )
+        recent = cursor.fetchone()
+
+        if recent:
+            try:
+                last_seen_dt = datetime.fromisoformat(recent["last_seen"])
+            except (ValueError, TypeError):
+                last_seen_dt = None
+
+            if last_seen_dt and (now - last_seen_dt).total_seconds() < 30:
+                cursor.execute(
+                    """
+                    UPDATE unknown_faces
+                    SET last_seen = ?,
+                        detection_count = detection_count + 1,
+                        image_path = COALESCE(image_path, ?)
+                    WHERE id = ?
+                    """,
+                    (now.isoformat(), image_path, recent["id"]),
+                )
+                connection.commit()
+                return int(recent["id"])
+
+        cursor.execute(
+            """
+            INSERT INTO unknown_faces (first_seen, last_seen, image_path, detection_count)
+            VALUES (?, ?, ?, 1)
+            """,
+            (now.isoformat(), now.isoformat(), image_path),
+        )
+        connection.commit()
+        return int(cursor.lastrowid)
+
+
+def load_unknown_faces() -> list[dict[str, Any]]:
+    with get_connection() as connection:
+        cursor = connection.cursor()
+        cursor.execute(
+            """
+            SELECT id, first_seen, last_seen, image_path, detection_count
+            FROM unknown_faces
+            ORDER BY last_seen DESC
+            """
+        )
+        rows = cursor.fetchall()
+
+    result = []
+    for row in rows:
+        img_path = row["image_path"]
+        image_url = ("/" + img_path.replace("\\", "/").lstrip("/")) if img_path else None
+        result.append(
+            {
+                "id": row["id"],
+                "first_seen": row["first_seen"],
+                "last_seen": row["last_seen"],
+                "image_path": img_path,
+                "image_url": image_url,
+                "detection_count": row["detection_count"],
+            }
+        )
+    return result
+
+
+def get_unknown_face(face_id: int) -> dict[str, Any] | None:
+    with get_connection() as connection:
+        cursor = connection.cursor()
+        cursor.execute(
+            "SELECT id, first_seen, last_seen, image_path, detection_count FROM unknown_faces WHERE id = ?",
+            (face_id,),
+        )
+        row = cursor.fetchone()
+
+    if row is None:
+        return None
+
+    img_path = row["image_path"]
+    return {
+        "id": row["id"],
+        "first_seen": row["first_seen"],
+        "last_seen": row["last_seen"],
+        "image_path": img_path,
+        "image_url": ("/" + img_path.replace("\\", "/").lstrip("/")) if img_path else None,
+        "detection_count": row["detection_count"],
+    }
+
+
+# ---------------------------------------------------------------------------
+# Attendance rules (stored in settings table)
+# ---------------------------------------------------------------------------
+
+def get_attendance_rules() -> dict[str, str]:
+    rules = dict(ATTENDANCE_RULE_DEFAULTS)
+    with get_connection() as connection:
+        cursor = connection.cursor()
+        for key in rules:
+            cursor.execute("SELECT value FROM settings WHERE key = ?", (f"rule_{key}",))
+            row = cursor.fetchone()
+            if row and row["value"]:
+                rules[key] = row["value"]
+    return rules
+
+
+def update_attendance_rules(rules: dict[str, str]) -> None:
+    with get_connection() as connection:
+        cursor = connection.cursor()
+        for key, value in rules.items():
+            if key in ATTENDANCE_RULE_DEFAULTS:
+                cursor.execute(
+                    """
+                    INSERT INTO settings (key, value) VALUES (?, ?)
+                    ON CONFLICT(key) DO UPDATE SET value = excluded.value
+                    """,
+                    (f"rule_{key}", value),
+                )
+        connection.commit()
+
+
+# ---------------------------------------------------------------------------
+# Admin activity log
+# ---------------------------------------------------------------------------
+
+def write_admin_log(admin_username: str, action_type: str, details: str | None = None) -> None:
+    now = get_current_datetime()
+    with get_connection() as connection:
+        cursor = connection.cursor()
+        cursor.execute(
+            """
+            INSERT INTO admin_activity_log (timestamp, admin_username, action_type, details)
+            VALUES (?, ?, ?, ?)
+            """,
+            (now.isoformat(), admin_username, action_type, details),
+        )
+        connection.commit()
+
+
+def read_admin_logs(limit: int = 200) -> list[dict[str, Any]]:
+    with get_connection() as connection:
+        cursor = connection.cursor()
+        cursor.execute(
+            """
+            SELECT id, timestamp, admin_username, action_type, details
+            FROM admin_activity_log
+            ORDER BY timestamp DESC
+            LIMIT ?
+            """,
+            (limit,),
+        )
+        rows = cursor.fetchall()
+
+    return [
+        {
+            "id": row["id"],
+            "timestamp": row["timestamp"],
+            "admin_username": row["admin_username"],
+            "action_type": row["action_type"],
+            "details": row["details"],
+        }
+        for row in rows
+    ]
