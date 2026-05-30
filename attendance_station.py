@@ -27,6 +27,9 @@ MIN_WORK_SECONDS = 2 * 60
 CHECKIN_COOLDOWN_SECONDS = 5 * 60
 FACE_RELOAD_SECONDS = 10
 FRAME_SCALE = 0.25
+CAMERA_WARMUP_SECONDS = 3.0
+SPOOF_TEXTURE_THRESHOLD = 80
+SPOOF_CONSECUTIVE_FRAMES = 3
 
 
 def get_status_by_time(event_type: str, current_dt: datetime) -> str:
@@ -85,15 +88,18 @@ class AttendanceStation:
         self.current_day = get_current_datetime().date()
         self.last_event: dict[str, dict[str, Any]] = {}
         self.blinked_faces: dict[str, bool] = {}
+        self.spoof_counts: dict[str, int] = {}
         self.known_encodings: list[Any] = []
         self.known_names: list[str] = []
         self.last_face_reload = 0.0
+        self.started_at = 0.0
 
     def start(self) -> None:
         if self.worker and self.worker.is_alive():
             return
 
         self.stop_event.clear()
+        self.started_at = sleep_time.monotonic()
         self.worker = threading.Thread(target=self._run, name="attendance-station", daemon=True)
         self.worker.start()
 
@@ -229,9 +235,15 @@ class AttendanceStation:
             self._set_error(f"Liveness check failed: {exc}")
             return f"{name} (Liveness error)"
 
-        if is_fake_texture(laplacian_var, threshold=115):
+        if is_fake_texture(laplacian_var, threshold=SPOOF_TEXTURE_THRESHOLD):
+            self.spoof_counts[name] = self.spoof_counts.get(name, 0) + 1
             self.blinked_faces[name] = False
+            warming_up = sleep_time.monotonic() - self.started_at < CAMERA_WARMUP_SECONDS
+            if warming_up or self.spoof_counts[name] < SPOOF_CONSECUTIVE_FRAMES:
+                return f"{name} (Calibrating)"
             return "SPOOFING!"
+
+        self.spoof_counts[name] = 0
 
         if ear < 0.20:
             self.blinked_faces[name] = True
