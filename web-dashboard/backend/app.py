@@ -58,8 +58,10 @@ except ImportError:
     cv2 = face_recognition = np = None  # type: ignore[assignment]
 
 from database_utils import (
+    create_admin_account,
     delete_employee_record,
     employee_name_exists,
+    ensure_admin_account,
     get_attendance_rules,
     get_unknown_face,
     insert_user,
@@ -67,11 +69,13 @@ from database_utils import (
     load_registered_faces,
     load_unknown_faces,
     log_manual_event,
+    read_admin_accounts,
     read_admin_logs,
     record_unknown_face,
     update_attendance_rules,
     update_employee_data,
     update_employee_photo,
+    verify_admin_credentials,
     write_admin_log,
 )
 from time_override import clear_time_override, read_time_override, set_time_override
@@ -116,8 +120,6 @@ def get_auth_settings() -> dict[str, str]:
     missing = [
         key
         for key, value in {
-            "ADMIN_USERNAME": username,
-            "ADMIN_PASSWORD": password,
             "SESSION_SECRET": session_secret,
         }.items()
         if not value
@@ -132,6 +134,12 @@ def get_auth_settings() -> dict[str, str]:
         "password": password,
         "session_secret": session_secret,
     }
+
+
+def seed_env_admin() -> None:
+    auth_settings = get_auth_settings()
+    if auth_settings["username"] and auth_settings["password"]:
+        ensure_admin_account(auth_settings["username"], auth_settings["password"])
 
 
 def encode_session_token(username: str) -> str:
@@ -304,6 +312,10 @@ class DashboardHandler(BaseHTTPRequestHandler):
 
         if parsed.path == "/api/attendance-rules":
             self.handle_attendance_rules_update()
+            return
+
+        if parsed.path == "/api/admins":
+            self.handle_admin_create()
             return
 
         employee_event = extract_employee_event(parsed.path)
@@ -510,6 +522,10 @@ class DashboardHandler(BaseHTTPRequestHandler):
             self.send_json({"logs": logs})
             return
 
+        if path == "/api/admins":
+            self.send_json({"admins": read_admin_accounts()})
+            return
+
         if path == "/api/test-time":
             self.send_json({"test_time": read_time_override()})
             return
@@ -532,6 +548,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
             return
 
         CAMERA_STATION.start()
+        self.write_current_admin_log("CAMERA_STARTED", "Attendance camera station started")
         self.send_json({"station": CAMERA_STATION.status()})
 
     def handle_camera_station_stop(self) -> None:
@@ -540,6 +557,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
             return
 
         CAMERA_STATION.stop()
+        self.write_current_admin_log("CAMERA_STOPPED", "Attendance camera station stopped")
         self.send_json({"station": CAMERA_STATION.status()})
 
     def handle_test_time_set(self) -> None:
@@ -551,21 +569,18 @@ class DashboardHandler(BaseHTTPRequestHandler):
             self.send_json({"error": str(exc)}, status=HTTPStatus.BAD_REQUEST)
             return
 
+        self.write_current_admin_log("TEST_TIME_SET", f"Scenario: {scenario_key}")
         self.send_json({"test_time": test_time})
 
     def handle_test_time_clear(self) -> None:
+        self.write_current_admin_log("TEST_TIME_CLEARED", "Returned to real system time")
         self.send_json({"test_time": clear_time_override()})
 
     def handle_login(self) -> None:
         payload = self.read_json_body()
         username = str(payload.get("username", "")).strip()
         password = str(payload.get("password", ""))
-        auth_settings = get_auth_settings()
-
-        if not (
-            hmac.compare_digest(username, auth_settings["username"])
-            and hmac.compare_digest(password, auth_settings["password"])
-        ):
+        if not verify_admin_credentials(username, password):
             self.send_json(
                 {"error": "Invalid username or password."},
                 status=HTTPStatus.UNAUTHORIZED,
@@ -772,6 +787,34 @@ class DashboardHandler(BaseHTTPRequestHandler):
         except Exception:
             pass
         self.send_json({"success": True, "rules": get_attendance_rules()})
+
+    def handle_admin_create(self) -> None:
+        payload = self.read_json_body()
+        username = str(payload.get("username", "")).strip()
+        password = str(payload.get("password", ""))
+
+        result = create_admin_account(username, password)
+        if not result["success"]:
+            status = HTTPStatus.CONFLICT if "already exists" in result["error"] else HTTPStatus.BAD_REQUEST
+            self.send_json({"error": result["error"]}, status=status)
+            return
+
+        session = self.get_authenticated_session()
+        current_admin = session["username"] if session else "unknown"
+        try:
+            write_admin_log(current_admin, "ADMIN_CREATED", f"Created admin: {username}")
+        except Exception:
+            pass
+
+        self.send_json(result, status=HTTPStatus.CREATED)
+
+    def write_current_admin_log(self, action_type: str, details: str | None = None) -> None:
+        session = self.get_authenticated_session()
+        username = session["username"] if session else "unknown"
+        try:
+            write_admin_log(username, action_type, details)
+        except Exception:
+            pass
 
     def get_authenticated_session(self) -> dict[str, str] | None:
         if hasattr(self, "_cached_session"):
@@ -983,6 +1026,7 @@ def run() -> None:
     load_local_env()
     get_auth_settings()
     init_db()
+    seed_env_admin()
     server = ThreadingHTTPServer((HOST, PORT), DashboardHandler)
     print(f"Dashboard server running at http://{HOST}:{PORT}")
     print(f"Reading database and logs from: {PROJECT_SOURCE_DIR}")

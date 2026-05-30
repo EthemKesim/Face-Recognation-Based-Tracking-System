@@ -11,6 +11,7 @@
   deletingEmployeeId: null,
   editingEmployeeId: null,
   unknownFaces: [],
+  admins: [],
   adminLogs: [],
   attendanceRules: null,
   activeView: "dashboard",
@@ -49,6 +50,8 @@ const confirmAccept = document.getElementById("confirm-accept");
 const attendanceFiltersForm = document.getElementById("attendance-filters");
 const employeeFiltersForm = document.getElementById("employee-filters");
 const logFiltersForm = document.getElementById("log-filters");
+const adminCreateForm = document.getElementById("admin-create-form");
+const adminCreateFeedback = document.getElementById("admin-create-feedback");
 const stationStartButton = document.getElementById("station-start-btn");
 const stationStopButton = document.getElementById("station-stop-btn");
 const clearTestTimeButton = document.getElementById("clear-test-time-btn");
@@ -154,6 +157,10 @@ logFiltersForm.addEventListener("submit", async (event) => {
   await loadLogs();
 });
 
+if (adminCreateForm) {
+  adminCreateForm.addEventListener("submit", handleAdminCreate);
+}
+
 document.getElementById("modal-close").addEventListener("click", () => modal.close());
 modal.addEventListener("click", (event) => {
   if (event.target === modal) {
@@ -237,7 +244,7 @@ async function refreshAll() {
   state.station = stationResponse.station || stationResponse;
   state.testTime = testTimeResponse.test_time;
 
-  await Promise.all([loadAttendanceRecords(), loadEmployees(), loadLogs(), loadUnknownFaces(), loadAdminLogs(), loadAttendanceRules()]);
+  await Promise.all([loadAttendanceRecords(), loadEmployees(), loadLogs(), loadUnknownFaces(), loadAdmins(), loadAdminLogs(), loadAttendanceRules()]);
 
   renderSummary();
   renderAnalytics();
@@ -253,6 +260,7 @@ async function refreshAll() {
   renderEmployees();
   renderLogs();
   renderUnknownFaces();
+  renderAdmins();
   renderAdminLogs();
   renderAttendanceRules();
   refreshLabel.textContent = `Last updated ${new Date().toLocaleString()}`;
@@ -304,6 +312,14 @@ async function loadAdminLogs() {
     const response = await api("/api/admin-logs");
     state.adminLogs = response.logs || [];
     renderAdminLogs();
+  } catch (_) {}
+}
+
+async function loadAdmins() {
+  try {
+    const response = await api("/api/admins");
+    state.admins = response.admins || [];
+    renderAdmins();
   } catch (_) {}
 }
 
@@ -1523,6 +1539,70 @@ function renderUnknownFaces() {
 // ---------------------------------------------------------------------------
 // Admin activity log
 // ---------------------------------------------------------------------------
+
+function renderAdmins() {
+  const tbody = document.getElementById("admins-body");
+  if (!tbody) return;
+  const admins = state.admins || [];
+
+  if (!admins.length) {
+    tbody.innerHTML = `<tr><td colspan="2"><div class="empty-state">No admin accounts found.</div></td></tr>`;
+    return;
+  }
+
+  tbody.innerHTML = admins.map((admin) => `
+    <tr>
+      <td class="cell-compact">${admin.id}</td>
+      <td>${escapeHtml(admin.username)}${state.session?.username === admin.username ? ' <span class="badge checkin">Current</span>' : ""}</td>
+    </tr>
+  `).join("");
+}
+
+async function handleAdminCreate(event) {
+  event.preventDefault();
+  if (!adminCreateForm) return;
+
+  const formData = new FormData(adminCreateForm);
+  const username = String(formData.get("username") || "").trim();
+  const password = String(formData.get("password") || "");
+  const submitButton = adminCreateForm.querySelector('button[type="submit"]');
+
+  if (!username || password.length < 6) {
+    setAdminCreateFeedback("error", "Username is required and password must be at least 6 characters.");
+    return;
+  }
+
+  submitButton.disabled = true;
+  submitButton.textContent = "Adding...";
+  setAdminCreateFeedback("", "");
+
+  try {
+    const response = await api("/api/admins", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ username, password }),
+    });
+    adminCreateForm.reset();
+    setAdminCreateFeedback("success", `${response.admin.username} can now log in to the dashboard.`);
+    await Promise.all([loadAdmins(), loadAdminLogs()]);
+  } catch (error) {
+    setAdminCreateFeedback("error", error.message || "Could not create admin.");
+  } finally {
+    submitButton.disabled = false;
+    submitButton.textContent = "Add Admin";
+  }
+}
+
+function setAdminCreateFeedback(type, message) {
+  if (!adminCreateFeedback) return;
+  if (!message) {
+    adminCreateFeedback.className = "feedback-banner";
+    adminCreateFeedback.textContent = "";
+    return;
+  }
+  adminCreateFeedback.className = `feedback-banner ${type} show`;
+  adminCreateFeedback.textContent = message;
+}
 
 function renderAdminLogs() {
   const tbody = document.getElementById("admin-logs-body");
