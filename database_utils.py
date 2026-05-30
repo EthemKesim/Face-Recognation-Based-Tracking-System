@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import sqlite3
+import hashlib
+import hmac
+import secrets
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -23,6 +26,8 @@ ATTENDANCE_RULE_DEFAULTS: dict[str, str] = {
     "afternoon_violation": "13:45",
     "work_end": "18:00",
 }
+
+PASSWORD_HASH_ITERATIONS = 260_000
 
 
 def get_connection() -> sqlite3.Connection:
@@ -136,6 +141,98 @@ def init_db() -> None:
         migrate_users_to_employees(cursor)
         migrate_text_logs_to_attendance(cursor)
         connection.commit()
+
+
+def hash_admin_password(password: str) -> str:
+    salt = secrets.token_hex(16)
+    digest = hashlib.pbkdf2_hmac(
+        "sha256",
+        password.encode("utf-8"),
+        salt.encode("ascii"),
+        PASSWORD_HASH_ITERATIONS,
+    ).hex()
+    return f"pbkdf2_sha256${PASSWORD_HASH_ITERATIONS}${salt}${digest}"
+
+
+def verify_admin_password(password: str, password_hash: str) -> bool:
+    try:
+        algorithm, iterations_text, salt, expected_digest = password_hash.split("$", 3)
+        iterations = int(iterations_text)
+    except (ValueError, AttributeError):
+        return False
+
+    if algorithm != "pbkdf2_sha256":
+        return False
+
+    digest = hashlib.pbkdf2_hmac(
+        "sha256",
+        password.encode("utf-8"),
+        salt.encode("ascii"),
+        iterations,
+    ).hex()
+    return hmac.compare_digest(digest, expected_digest)
+
+
+def ensure_admin_account(username: str, password: str) -> bool:
+    username = username.strip()
+    if not username or not password:
+        return False
+
+    with get_connection() as connection:
+        cursor = connection.cursor()
+        cursor.execute("SELECT id FROM admins WHERE username = ?", (username,))
+        if cursor.fetchone() is not None:
+            return False
+
+        cursor.execute(
+            "INSERT INTO admins (username, password_hash) VALUES (?, ?)",
+            (username, hash_admin_password(password)),
+        )
+        connection.commit()
+        return True
+
+
+def create_admin_account(username: str, password: str) -> dict[str, Any]:
+    username = username.strip()
+    if not username:
+        return {"success": False, "error": "Admin username is required."}
+    if len(password) < 6:
+        return {"success": False, "error": "Admin password must be at least 6 characters."}
+
+    try:
+        with get_connection() as connection:
+            cursor = connection.cursor()
+            cursor.execute(
+                "INSERT INTO admins (username, password_hash) VALUES (?, ?)",
+                (username, hash_admin_password(password)),
+            )
+            admin_id = int(cursor.lastrowid)
+            connection.commit()
+    except sqlite3.IntegrityError:
+        return {"success": False, "error": "An admin with this username already exists."}
+
+    return {"success": True, "admin": {"id": admin_id, "username": username}}
+
+
+def verify_admin_credentials(username: str, password: str) -> bool:
+    with get_connection() as connection:
+        cursor = connection.cursor()
+        cursor.execute("SELECT password_hash FROM admins WHERE username = ?", (username.strip(),))
+        row = cursor.fetchone()
+
+    if row is None:
+        return False
+
+    return verify_admin_password(password, row["password_hash"])
+
+
+def read_admin_accounts() -> list[dict[str, Any]]:
+    with get_connection() as connection:
+        cursor = connection.cursor()
+        cursor.execute("SELECT id, username FROM admins ORDER BY username COLLATE NOCASE")
+        rows = cursor.fetchall()
+
+    return [{"id": row["id"], "username": row["username"]} for row in rows]
 
 
 def migrate_users_to_employees(cursor: sqlite3.Cursor) -> None:

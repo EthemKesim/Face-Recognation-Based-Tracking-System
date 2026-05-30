@@ -277,6 +277,31 @@
       </section>
 
       <section class="view" data-view-panel="admin-logs">
+        <section class="panel" style="margin-bottom:1.5rem">
+          <div class="panel-header form-header">
+            <div>
+              <p class="eyebrow">Access Control</p>
+              <h3>Dashboard Admins</h3>
+            </div>
+            <form id="admin-create-form" class="filter-row">
+              <input type="text" name="username" placeholder="New admin username" autocomplete="off" required>
+              <input type="password" name="password" placeholder="Temporary password" autocomplete="new-password" required minlength="6">
+              <button type="submit">Add Admin</button>
+            </form>
+          </div>
+          <div id="admin-create-feedback" class="feedback-banner" style="margin:0 1rem 1rem"></div>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>ID</th>
+                  <th>Username</th>
+                </tr>
+              </thead>
+              <tbody id="admins-body"></tbody>
+            </table>
+          </div>
+        </section>
         <section class="panel">
           <div class="panel-header">
             <div>
