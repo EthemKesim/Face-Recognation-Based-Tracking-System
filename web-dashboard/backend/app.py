@@ -60,6 +60,7 @@ except ImportError:
 from database_utils import (
     create_admin_account,
     delete_employee_record,
+    delete_unknown_face,
     employee_name_exists,
     ensure_admin_account,
     get_attendance_rules,
@@ -356,9 +357,14 @@ class DashboardHandler(BaseHTTPRequestHandler):
         if not self.require_auth(is_api=True):
             return
 
+        unknown_face_id = extract_unknown_face_id(parsed.path)
+        if unknown_face_id is not None:
+            self.handle_unknown_face_delete(unknown_face_id)
+            return
+
         employee_id = extract_employee_id(parsed.path)
         if employee_id is None:
-            self.send_json({"error": "Endpoint not found."}, status=HTTPStatus.NOT_FOUND)
+            self.send_json({"error": f"Endpoint not found: {parsed.path}"}, status=HTTPStatus.NOT_FOUND)
             return
 
         self.handle_employee_delete(employee_id)
@@ -695,6 +701,27 @@ class DashboardHandler(BaseHTTPRequestHandler):
         relative_path = f"employee_images/{image_filename}"
         update_employee_photo(user_id, relative_path)
 
+        for uf in load_unknown_faces():
+            img_path = uf.get("image_path")
+            if not img_path:
+                continue
+            full_path = PROJECT_SOURCE_DIR / img_path
+            if not full_path.exists():
+                continue
+            try:
+                uf_frame = cv2.imread(str(full_path))
+                if uf_frame is None:
+                    continue
+                rgb_uf = cv2.cvtColor(uf_frame, cv2.COLOR_BGR2RGB)
+                uf_locs = face_recognition.face_locations(rgb_uf)
+                uf_encs = face_recognition.face_encodings(rgb_uf, uf_locs)
+                if not uf_encs:
+                    continue
+                if float(face_recognition.face_distance([face_encodings[0]], uf_encs[0])[0]) < 0.6:
+                    delete_unknown_face(uf["id"])
+            except Exception:
+                pass
+
         session = self.get_authenticated_session()
         username = session["username"] if session else "unknown"
         try:
@@ -723,6 +750,23 @@ class DashboardHandler(BaseHTTPRequestHandler):
         except Exception:
             pass
         self.send_json(result)
+
+    def handle_unknown_face_delete(self, face_id: int) -> None:
+        try:
+            result = delete_unknown_face(face_id)
+        except Exception as exc:
+            self.send_json({"error": f"Server error: {exc}"}, status=HTTPStatus.INTERNAL_SERVER_ERROR)
+            return
+        if not result["deleted"]:
+            self.send_json({"error": result.get("error", "Not found.")}, status=HTTPStatus.NOT_FOUND)
+            return
+        session = self.get_authenticated_session()
+        username = session["username"] if session else "unknown"
+        try:
+            write_admin_log(username, "UNKNOWN_FACE_DELETED", f"Unknown face ID: {face_id}")
+        except Exception:
+            pass
+        self.send_json({"deleted": True, "face_id": face_id})
 
     def handle_employee_delete(self, employee_id: int) -> None:
         result = delete_employee_record(employee_id)

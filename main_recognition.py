@@ -7,8 +7,10 @@ from database_utils import init_db, insert_user, load_registered_faces, load_tod
 from time_override import get_current_datetime
 
 KNOWN_ENCODINGS, KNOWN_NAMES = load_registered_faces()
-LIVENESS_STATUS = {}
 LAST_EVENT = {}  # {name: {"type": "CHECK-IN"|"CHECK-OUT", "time": datetime}}
+LAST_BLINK_TIME = {}  # {name: datetime}
+BLINK_WINDOW_START = {}  # {name: datetime}
+BLINK_VALID_SECONDS = 15
 FRAME_COUNTER = 0
 LOG_FILE = "attendance_logs.txt"
 
@@ -98,7 +100,7 @@ def run_recognition():
 
             current_face_results = []
 
-            for i, (face_loc, face_encoding) in enumerate(zip(face_locations, face_encodings)):
+            for face_loc, face_encoding in zip(face_locations, face_encodings):
                 top, right, bottom, left = face_loc
                 top *= 4; right *= 4; bottom *= 4; left *= 4
 
@@ -111,37 +113,40 @@ def run_recognition():
 
                     ear, lap_var = check_liveness(frame, (top, right, bottom, left))
 
-                    if i not in LIVENESS_STATUS:
-                        LIVENESS_STATUS[i] = False
-
                     if is_fake_texture(lap_var, threshold=115):
                         display_name = "SPOOFING!"
-                        LIVENESS_STATUS[i] = False
+                        LAST_BLINK_TIME.pop(actual_name, None)
+                        BLINK_WINDOW_START.pop(actual_name, None)
                     else:
-                        if ear < 0.20:
-                            LIVENESS_STATUS[i] = True
-
                         current_time = get_current_datetime()
+
+                        if actual_name not in BLINK_WINDOW_START:
+                            BLINK_WINDOW_START[actual_name] = current_time
+
+                        if ear < 0.20:
+                            LAST_BLINK_TIME[actual_name] = current_time
+
+                        last_blink = LAST_BLINK_TIME.get(actual_name)
+                        has_blinked = (
+                            last_blink is not None
+                            and (current_time - last_blink).total_seconds() <= BLINK_VALID_SECONDS
+                        )
+
                         event_type = should_log_event(actual_name, current_time)
 
-                        if event_type == "CHECK-OUT":
-                            # CHECK-OUT: face recognition alone is sufficient, no blink needed
+                        if event_type in ("CHECK-IN", "CHECK-OUT") and has_blinked:
                             display_name = actual_name
-                            status = get_status_by_time("CHECK-OUT", current_time)
+                            status = get_status_by_time(event_type, current_time)
                             log_attendance_event(actual_name, status, current_time)
                             log_to_txt(actual_name, status, current_time)
-                            LAST_EVENT[actual_name] = {"type": "CHECK-OUT", "time": current_time}
-                            print(f"[CHECK-OUT] {actual_name} @ {current_time.strftime('%H:%M:%S')} — {status}")
-                        elif event_type == "CHECK-IN" and LIVENESS_STATUS[i]:
-                            # CHECK-IN: requires confirmed liveness (blink)
+                            LAST_EVENT[actual_name] = {"type": event_type, "time": current_time}
+                            LAST_BLINK_TIME.pop(actual_name, None)
+                            BLINK_WINDOW_START.pop(actual_name, None)
+                            print(f"[{event_type}] {actual_name} @ {current_time.strftime('%H:%M:%S')} — {status}")
+                        elif event_type is None and has_blinked:
                             display_name = actual_name
-                            status = get_status_by_time("CHECK-IN", current_time)
-                            log_attendance_event(actual_name, status, current_time)
-                            log_to_txt(actual_name, status, current_time)
-                            LAST_EVENT[actual_name] = {"type": "CHECK-IN", "time": current_time}
-                            print(f"[CHECK-IN] {actual_name} @ {current_time.strftime('%H:%M:%S')} — {status}")
-                        elif event_type is None and LIVENESS_STATUS[i]:
-                            display_name = actual_name
+                        elif (current_time - BLINK_WINDOW_START[actual_name]).total_seconds() > BLINK_VALID_SECONDS:
+                            display_name = "SPOOFING!"
                         else:
                             display_name = f"{actual_name} (Blink)"
 

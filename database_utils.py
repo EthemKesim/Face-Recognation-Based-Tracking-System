@@ -664,7 +664,7 @@ def record_unknown_face(image_path: str | None = None) -> int:
             except (ValueError, TypeError):
                 last_seen_dt = None
 
-            if last_seen_dt and (now - last_seen_dt).total_seconds() < 30:
+            if last_seen_dt and (now - last_seen_dt).total_seconds() < 300:
                 cursor.execute(
                     """
                     UPDATE unknown_faces
@@ -716,6 +716,29 @@ def load_unknown_faces() -> list[dict[str, Any]]:
             }
         )
     return result
+
+
+def delete_unknown_face(face_id: int) -> dict[str, Any]:
+    with get_connection() as connection:
+        cursor = connection.cursor()
+        cursor.execute("SELECT id, image_path FROM unknown_faces WHERE id = ?", (face_id,))
+        row = cursor.fetchone()
+        if row is None:
+            return {"deleted": False, "error": "Record not found."}
+
+        image_path = row["image_path"]
+        cursor.execute("DELETE FROM unknown_faces WHERE id = ?", (face_id,))
+        connection.commit()
+
+    if image_path:
+        candidate = resolve_managed_file_path(image_path)
+        if candidate and candidate.exists() and candidate.is_file():
+            try:
+                candidate.unlink()
+            except OSError:
+                pass
+
+    return {"deleted": True, "face_id": face_id}
 
 
 def get_unknown_face(face_id: int) -> dict[str, Any] | None:

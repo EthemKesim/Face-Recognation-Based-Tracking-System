@@ -1522,16 +1522,66 @@ function renderUnknownFaces() {
       </div>
       <p class="timestamp">First seen: ${formatDateTime(face.first_seen)} &middot; Last seen: ${formatDateTime(face.last_seen)}</p>
       <p class="log-item-body">Detected ${face.detection_count} time${face.detection_count !== 1 ? "s" : ""}</p>
-      <div style="margin-top:.5rem">
+      <div style="margin-top:.5rem;display:flex;gap:.5rem;flex-wrap:wrap">
         <button class="secondary-button register-unknown-btn" data-face-id="${face.id}" data-image-url="${escapeHtml(face.image_url || "")}" type="button">Register this person</button>
+        <button class="danger-button delete-button delete-unknown-btn" data-face-id="${face.id}" type="button">Delete</button>
       </div>
     </article>
   `).join("");
 
   container.querySelectorAll(".register-unknown-btn").forEach((btn) => {
-    btn.addEventListener("click", () => {
+    btn.addEventListener("click", async () => {
+      const imageUrl = btn.dataset.imageUrl;
       setView("settings");
-      setFeedback("info", "Navigate to the Register section below to register this face. You can upload the saved image.");
+
+      // Upload tab'ına geç
+      document.querySelectorAll(".source-tab").forEach((t) =>
+        t.classList.toggle("active", t.dataset.source === "upload")
+      );
+      document.getElementById("camera-source").style.display = "none";
+      document.getElementById("upload-source").style.display = "";
+
+      if (imageUrl) {
+        try {
+          const resp = await fetch(imageUrl);
+          const blob = await resp.blob();
+          const reader = new FileReader();
+          reader.onload = (e) => {
+            capturedImageDataUrl = e.target.result;
+            const uploadPreview = document.getElementById("upload-preview");
+            const uploadArea = document.getElementById("upload-area");
+            const clearUploadBtn = document.getElementById("clear-upload-btn");
+            const registerSubmitBtn = document.getElementById("register-submit-btn");
+            const registerName = document.getElementById("register-name");
+            uploadPreview.src = capturedImageDataUrl;
+            uploadPreview.style.display = "block";
+            uploadArea.style.display = "none";
+            clearUploadBtn.style.display = "";
+            registerSubmitBtn.disabled = !registerName.value.trim();
+            registerName.focus();
+            registerName.scrollIntoView({ behavior: "smooth", block: "center" });
+          };
+          reader.readAsDataURL(blob);
+        } catch {
+          document.getElementById("register-name")?.scrollIntoView({ behavior: "smooth", block: "center" });
+        }
+      } else {
+        document.getElementById("register-name")?.scrollIntoView({ behavior: "smooth", block: "center" });
+      }
+    });
+  });
+
+  container.querySelectorAll(".delete-unknown-btn").forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      const faceId = parseInt(btn.dataset.faceId, 10);
+      if (!confirm(`Unknown Face #${faceId} silinsin mi?`)) return;
+      try {
+        await api(`/api/unknown-faces/${faceId}`, { method: "DELETE" });
+        state.unknownFaces = state.unknownFaces.filter((f) => f.id !== faceId);
+        renderUnknownFaces();
+      } catch (err) {
+        setFeedback("error", err.message || "Unknown face silinemedi.");
+      }
     });
   });
 }

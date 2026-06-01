@@ -29,7 +29,8 @@ FACE_RELOAD_SECONDS = 10
 FRAME_SCALE = 0.25
 CAMERA_WARMUP_SECONDS = 3.0
 SPOOF_TEXTURE_THRESHOLD = 80
-SPOOF_CONSECUTIVE_FRAMES = 3
+SPOOF_CONSECUTIVE_FRAMES = 1
+BLINK_VALID_SECONDS = 15
 
 
 def get_status_by_time(event_type: str, current_dt: datetime) -> str:
@@ -87,7 +88,8 @@ class AttendanceStation:
         self.online = False
         self.current_day = get_current_datetime().date()
         self.last_event: dict[str, dict[str, Any]] = {}
-        self.blinked_faces: dict[str, bool] = {}
+        self.last_blink_time: dict[str, datetime] = {}
+        self.blink_window_start: dict[str, datetime] = {}
         self.spoof_counts: dict[str, int] = {}
         self.known_encodings: list[Any] = []
         self.known_names: list[str] = []
@@ -237,27 +239,36 @@ class AttendanceStation:
 
         if is_fake_texture(laplacian_var, threshold=SPOOF_TEXTURE_THRESHOLD):
             self.spoof_counts[name] = self.spoof_counts.get(name, 0) + 1
-            self.blinked_faces[name] = False
+            self.last_blink_time.pop(name, None)
+            self.blink_window_start.pop(name, None)
             warming_up = sleep_time.monotonic() - self.started_at < CAMERA_WARMUP_SECONDS
             if warming_up or self.spoof_counts[name] < SPOOF_CONSECUTIVE_FRAMES:
                 return f"{name} (Calibrating)"
             return "SPOOFING!"
 
         self.spoof_counts[name] = 0
+        now = get_current_datetime()
+
+        if name not in self.blink_window_start:
+            self.blink_window_start[name] = now
 
         if ear < 0.20:
-            self.blinked_faces[name] = True
+            self.last_blink_time[name] = now
 
-        now = get_current_datetime()
+        last_blink = self.last_blink_time.get(name)
+        has_blinked = (
+            last_blink is not None
+            and (now - last_blink).total_seconds() <= BLINK_VALID_SECONDS
+        )
+
         event_type = self._next_event_type(name, now)
-        has_blinked = self.blinked_faces.get(name, False)
 
-        if event_type == "CHECK-OUT":
-            return self._record_event(name, event_type, now)
-        if event_type == "CHECK-IN" and has_blinked:
+        if event_type in ("CHECK-IN", "CHECK-OUT") and has_blinked:
             return self._record_event(name, event_type, now)
         if event_type is None and has_blinked:
             return name
+        if (now - self.blink_window_start[name]).total_seconds() > BLINK_VALID_SECONDS:
+            return "SPOOFING!"
         return f"{name} (Blink)"
 
     def _next_event_type(self, name: str, now: datetime) -> str | None:
@@ -280,7 +291,8 @@ class AttendanceStation:
             log_file.write(f"{event_time.strftime(LOG_DATETIME_FORMAT)} - {name} - {status}\n")
 
         self.last_event[name] = {"type": event_type, "time": event_time}
-        self.blinked_faces[name] = False
+        self.last_blink_time.pop(name, None)
+        self.blink_window_start.pop(name, None)
         with self.lock:
             self.latest_recognition = {
                 "recognition_status": "Recognized",
@@ -294,7 +306,7 @@ class AttendanceStation:
 
     def _record_unknown_detection(self, frame=None, location=None) -> None:
         now = get_current_datetime()
-        if self.last_unknown_at and (now - self.last_unknown_at).total_seconds() < 3:
+        if self.last_unknown_at and (now - self.last_unknown_at).total_seconds() < 300:
             return
 
         self.last_unknown_at = now
@@ -359,7 +371,8 @@ class AttendanceStation:
         if self.current_day != current_day:
             self.current_day = current_day
             self._load_day_state()
-            self.blinked_faces.clear()
+            self.last_blink_time.clear()
+            self.blink_window_start.clear()
 
     def _load_day_state(self) -> None:
         self.last_event = load_todays_attendance_state()
