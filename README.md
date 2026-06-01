@@ -4,8 +4,6 @@
 
 # Face Recognition Based Attendance Tracking System
 
-*No badge clutter. No noise. Just a system that knows your face.*
-
 ---
 
 [🚀 Get Started](#-installation) · [🏗️ Architecture](#️-system-architecture) · [🖥️ Dashboard](#️-admin-dashboard) · [🧪 Tests](#-testing) · [👥 Team](#-authors)
@@ -59,7 +57,9 @@ Point a webcam at the door. It handles the rest.
 
 How data flows from webcam to dashboard:
 
-![System Architecture](docs/SystemArchitecture.png)
+<div align="center">
+  <img src="docs/SystemArchitecture.png" alt="System Architecture" width="600"/>
+</div>
 
 ---
 
@@ -67,7 +67,9 @@ How data flows from webcam to dashboard:
 
 What happens every time a face appears in front of the camera:
 
-![Recognition Flow](docs/RecognitionFlow.png)
+<div align="center">
+  <img src="docs/RecognitionFlow.png" alt="Recognition Flow" width="400"/>
+</div>
 
 ---
 
@@ -372,14 +374,8 @@ All tests must pass. New features need new tests.
 Built with care by four people who wanted attendance to be invisible:
 
 - **Deniz Beril Pekin**
-- **Ethem Kesim** — [@EthemKesim](https://github.com/EthemKesim)
+- **Ethem Kesim**
 - **Emre Çubuk**
 - **Ozan Umut Güney**
 
 ---
-
-<div align="center">
-
-*built with obsession, tested with patience, deployed with a blink*
-
-</div>
