@@ -10,6 +10,7 @@ KNOWN_ENCODINGS, KNOWN_NAMES = load_registered_faces()
 LAST_EVENT = {}  # {name: {"type": "CHECK-IN"|"CHECK-OUT", "time": datetime}}
 LAST_BLINK_TIME = {}  # {name: datetime}
 BLINK_WINDOW_START = {}  # {name: datetime}
+EYES_CLOSED = {}  # {name: bool}
 BLINK_VALID_SECONDS = 15
 FRAME_COUNTER = 0
 LOG_FILE = "attendance_logs.txt"
@@ -117,14 +118,19 @@ def run_recognition():
                         display_name = "SPOOFING!"
                         LAST_BLINK_TIME.pop(actual_name, None)
                         BLINK_WINDOW_START.pop(actual_name, None)
+                        EYES_CLOSED.pop(actual_name, None)
                     else:
                         current_time = get_current_datetime()
 
                         if actual_name not in BLINK_WINDOW_START:
                             BLINK_WINDOW_START[actual_name] = current_time
 
+                        # Blink cycle: eyes must close then reopen
                         if ear < 0.20:
+                            EYES_CLOSED[actual_name] = True
+                        elif EYES_CLOSED.get(actual_name):
                             LAST_BLINK_TIME[actual_name] = current_time
+                            EYES_CLOSED[actual_name] = False
 
                         last_blink = LAST_BLINK_TIME.get(actual_name)
                         has_blinked = (
@@ -142,6 +148,7 @@ def run_recognition():
                             LAST_EVENT[actual_name] = {"type": event_type, "time": current_time}
                             LAST_BLINK_TIME.pop(actual_name, None)
                             BLINK_WINDOW_START.pop(actual_name, None)
+                            EYES_CLOSED.pop(actual_name, None)
                             print(f"[{event_type}] {actual_name} @ {current_time.strftime('%H:%M:%S')} — {status}")
                         elif event_type is None and has_blinked:
                             display_name = actual_name

@@ -90,6 +90,7 @@ class AttendanceStation:
         self.last_event: dict[str, dict[str, Any]] = {}
         self.last_blink_time: dict[str, datetime] = {}
         self.blink_window_start: dict[str, datetime] = {}
+        self.eyes_closed: dict[str, bool] = {}
         self.spoof_counts: dict[str, int] = {}
         self.known_encodings: list[Any] = []
         self.known_names: list[str] = []
@@ -241,6 +242,7 @@ class AttendanceStation:
             self.spoof_counts[name] = self.spoof_counts.get(name, 0) + 1
             self.last_blink_time.pop(name, None)
             self.blink_window_start.pop(name, None)
+            self.eyes_closed.pop(name, None)
             warming_up = sleep_time.monotonic() - self.started_at < CAMERA_WARMUP_SECONDS
             if warming_up or self.spoof_counts[name] < SPOOF_CONSECUTIVE_FRAMES:
                 return f"{name} (Calibrating)"
@@ -252,8 +254,12 @@ class AttendanceStation:
         if name not in self.blink_window_start:
             self.blink_window_start[name] = now
 
+        # Blink cycle: eyes must close (EAR < 0.20) then reopen (EAR >= 0.20)
         if ear < 0.20:
+            self.eyes_closed[name] = True
+        elif self.eyes_closed.get(name):
             self.last_blink_time[name] = now
+            self.eyes_closed[name] = False
 
         last_blink = self.last_blink_time.get(name)
         has_blinked = (
@@ -293,6 +299,7 @@ class AttendanceStation:
         self.last_event[name] = {"type": event_type, "time": event_time}
         self.last_blink_time.pop(name, None)
         self.blink_window_start.pop(name, None)
+        self.eyes_closed.pop(name, None)
         with self.lock:
             self.latest_recognition = {
                 "recognition_status": "Recognized",
@@ -373,6 +380,7 @@ class AttendanceStation:
             self._load_day_state()
             self.last_blink_time.clear()
             self.blink_window_start.clear()
+            self.eyes_closed.clear()
 
     def _load_day_state(self) -> None:
         self.last_event = load_todays_attendance_state()
