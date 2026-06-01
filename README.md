@@ -256,17 +256,6 @@ python main_recognition.py
 
 ---
 
-## 🖥️ Admin Dashboard
-
-### Setup
-
-Create `web-dashboard/.env`:
-
-```env
-ADMIN_USERNAME=admin
-ADMIN_PASSWORD=your-secure-password
-SESSION_SECRET=your-random-secret-key
-```
 
 ### Start
 
