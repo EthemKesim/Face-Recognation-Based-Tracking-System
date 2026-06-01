@@ -124,13 +124,6 @@ Configure the live attendance camera and view real-time recognition worker statu
 
 ---
 
-### 🔑 Admin Logs
-Full audit trail of every admin action: who did what and when. Add new admins directly from this panel.
-
-![Admin Logs](docs/screenshots/08_admin_logs.png)
-
----
-
 ### 👥 Registered Employees
 Employee directory with face registration status, last seen timestamp, and current attendance status.
 
